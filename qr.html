@@ -80,25 +80,27 @@ let qr
 
 function generateQR(){
 
-const token=Math.random().toString(36).substring(2,10)
+const token = Math.random().toString(36).substring(2,10)
 
-const url=`https://work-ibj8.onrender.com/check.html?token=${token}`
+const url = `https://work-ibj8.onrender.com/check.html?token=${token}`
 
-document.getElementById("qrcode").innerHTML=""
+console.log("Генерую QR з URL:", url)
 
-qr=new QRCode(document.getElementById("qrcode"),{
-text:url,
-width:220,
-height:220
+document.getElementById("qrcode").innerHTML = ""
+
+qr = new QRCode(document.getElementById("qrcode"), {
+text: url,
+width: 220,
+height: 220
 })
 
 }
 
 function updateTime(){
 
-const now=new Date()
+const now = new Date()
 
-document.getElementById("time").innerHTML=
+document.getElementById("time").innerHTML =
 now.toLocaleTimeString()
 
 }
@@ -106,12 +108,10 @@ now.toLocaleTimeString()
 generateQR()
 updateTime()
 
-setInterval(generateQR,30000)
-setInterval(updateTime,1000)
+setInterval(generateQR, 30000)
+setInterval(updateTime, 1000)
 
 </script>
 
 </body>
-
 </html>
-
