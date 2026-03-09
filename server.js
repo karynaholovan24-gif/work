@@ -1,7 +1,7 @@
 const express = require('express');
-const sqlite3 = require('sqlite3').verbose();
 const cors = require('cors');
 const path = require('path');
+const { MongoClient, ServerApiVersion } = require('mongodb');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -15,33 +15,38 @@ app.use(express.static(__dirname));
 app.use(express.static(path.join(__dirname, '..')));
 
 // =====================================
-// 2. Підключення до бази даних
+// 2. Підключення до MongoDB Atlas
 // =====================================
-const db = new sqlite3.Database('./database.sqlite', (err) => {
-    if (err) {
-        console.error('❌ Помилка БД:', err.message);
-    } else {
-        console.log('✅ База даних створена');
-        
-        db.run(`CREATE TABLE IF NOT EXISTS tokens (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            token TEXT UNIQUE,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            is_used BOOLEAN DEFAULT 0
-        )`);
-        
-        db.run(`CREATE TABLE IF NOT EXISTS attendance (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            employee_name TEXT,
-            token TEXT,
-            latitude REAL,
-            longitude REAL,
-            check_in_time DATETIME DEFAULT CURRENT_TIMESTAMP
-        )`, (err) => {
-            if (!err) console.log('✅ Таблиці готові');
-        });
+const uri = "mongodb+srv://karynaholovan24:12345@cluster0.eocgh.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0";
+
+const client = new MongoClient(uri, {
+    serverApi: {
+        version: ServerApiVersion.v1,
+        strict: true,
+        deprecationErrors: true,
     }
 });
+
+let db;
+
+async function connectToMongo() {
+    try {
+        await client.connect();
+        db = client.db("office_checkin");
+        console.log("✅ Підключено до MongoDB Atlas!");
+        
+        // Створюємо індекси
+        await db.collection("tokens").createIndex({ token: 1 }, { unique: true });
+        await db.collection("tokens").createIndex({ created_at: 1 }, { expireAfterSeconds: 120 });
+        await db.collection("attendance").createIndex({ check_in_time: -1 });
+        
+        console.log("✅ Індекси створено");
+    } catch (error) {
+        console.error("❌ Помилка підключення до MongoDB:", error);
+    }
+}
+
+connectToMongo();
 
 // =====================================
 // 3. Генерація токена
@@ -54,24 +59,34 @@ function generateToken() {
 // =====================================
 // 4. API отримання токена (для QR)
 // =====================================
-app.get('/api/generate-token', (req, res) => {
-    const token = generateToken();
-    console.log(`\n🔄 Генерую новий токен: ${token}`);
-    
-    db.run('INSERT INTO tokens (token) VALUES (?)', [token], function(err) {
-        if (err) {
-            console.error('❌ Помилка збереження токена:', err.message);
-            return res.status(500).json({ error: 'Помилка сервера' });
-        }
-        console.log(`✅ Токен збережено в БД: ${token}`);
+app.get('/api/generate-token', async (req, res) => {
+    try {
+        const token = generateToken();
+        console.log(`\n🔄 Генерую новий токен: ${token}`);
+        
+        await db.collection("tokens").insertOne({
+            token: token,
+            created_at: new Date(),
+            is_used: false
+        });
+        
+        console.log(`✅ Токен збережено в MongoDB`);
+        
+        // Перевірка скільки токенів в базі
+        const count = await db.collection("tokens").countDocuments();
+        console.log(`📊 Всього токенів в базі: ${count}`);
+        
         res.json({ token: token });
-    });
+    } catch (error) {
+        console.error("❌ Помилка збереження токена:", error);
+        res.status(500).json({ error: 'Помилка сервера' });
+    }
 });
 
 // =====================================
 // 5. API відмітки приходу
 // =====================================
-app.post('/api/check-in', (req, res) => {
+app.post('/api/check-in', async (req, res) => {
     const { token, employee, latitude, longitude } = req.body;
 
     // Детальне логування
@@ -90,20 +105,19 @@ app.post('/api/check-in', (req, res) => {
         });
     }
 
-    // Спочатку перевіримо, чи взагалі є такий токен в базі
-    db.get('SELECT * FROM tokens WHERE token = ?', [token], (err, row) => {
-        if (err) {
-            console.log("❌ ПОМИЛКА БД:", err.message);
-            return res.json({ success: false, message: '❌ Помилка бази даних' });
-        }
+    try {
+        // Шукаємо токен в MongoDB
+        const tokenDoc = await db.collection("tokens").findOne({ token: token });
         
         console.log("\n🔍 РЕЗУЛЬТАТ ПОШУКУ ТОКЕНА:");
         
-        if (!row) {
-            console.log("❌ Токен НЕ ЗНАЙДЕНО в базі даних!");
-            console.log("   Можливі причини:");
-            console.log("   - Токен не був збережений при генерації");
-            console.log("   - База даних очистилась (на Render це буває)");
+        if (!tokenDoc) {
+            console.log("❌ Токен НЕ ЗНАЙДЕНО в MongoDB!");
+            
+            // Покажемо всі токени для діагностики
+            const allTokens = await db.collection("tokens").find({}).toArray();
+            console.log("📋 Всі токени в базі:", allTokens.map(t => t.token));
+            
             return res.json({ 
                 success: false, 
                 message: '❌ Токен не знайдено в базі' 
@@ -111,13 +125,12 @@ app.post('/api/check-in', (req, res) => {
         }
 
         console.log("✅ Токен ЗНАЙДЕНО!");
-        console.log("   ID:", row.id);
-        console.log("   Токен:", row.token);
-        console.log("   Створено:", row.created_at);
-        console.log("   Використаний:", row.is_used ? "ТАК" : "НІ");
+        console.log("   Токен:", tokenDoc.token);
+        console.log("   Створено:", tokenDoc.created_at);
+        console.log("   Використаний:", tokenDoc.is_used ? "ТАК" : "НІ");
 
         // Перевірка чи токен не використаний
-        if (row.is_used === 1) {
+        if (tokenDoc.is_used) {
             console.log("❌ Токен ВЖЕ ВИКОРИСТАНИЙ!");
             return res.json({ 
                 success: false, 
@@ -126,7 +139,7 @@ app.post('/api/check-in', (req, res) => {
         }
 
         // Перевірка часу створення
-        const createdTime = new Date(row.created_at).getTime();
+        const createdTime = new Date(tokenDoc.created_at).getTime();
         const nowTime = new Date().getTime();
         const ageSeconds = (nowTime - createdTime) / 1000;
         
@@ -149,8 +162,8 @@ app.post('/api/check-in', (req, res) => {
         console.log("   Координати офісу:", OFFICE_LAT, OFFICE_LON);
         console.log("   Координати працівника:", latitude, longitude);
 
-        // Спрощена перевірка (для тесту пропустимо детальний розрахунок)
-        const latDiff = Math.abs(latitude - OFFICE_LAT) * 111; // приблизно км в градусі
+        // Спрощена перевірка відстані
+        const latDiff = Math.abs(latitude - OFFICE_LAT) * 111;
         const lonDiff = Math.abs(longitude - OFFICE_LON) * 111 * Math.cos(OFFICE_LAT * Math.PI / 180);
         const distance = Math.sqrt(latDiff*latDiff + lonDiff*lonDiff);
         
@@ -166,57 +179,94 @@ app.post('/api/check-in', (req, res) => {
 
         console.log("✅ Геолокація в межах офісу");
 
-        // Токен валідний — позначаємо як використаний
-        db.run('UPDATE tokens SET is_used = 1 WHERE token = ?', [token], function(err) {
-            if (err) {
-                console.log("❌ ПОМИЛКА при оновленні токена:", err.message);
-                return res.json({ success: false, message: '❌ Помилка запису' });
-            }
+        // Позначаємо токен як використаний
+        await db.collection("tokens").updateOne(
+            { token: token },
+            { $set: { is_used: true } }
+        );
 
-            console.log("✅ Токен позначено як використаний");
+        console.log("✅ Токен позначено як використаний");
 
-            // Записуємо прихід
-            db.run(
-                'INSERT INTO attendance (employee_name, token, latitude, longitude) VALUES (?, ?, ?, ?)',
-                [employee, token, latitude, longitude],
-                function(err) {
-                    if (err) {
-                        console.log("❌ ПОМИЛКА при записі відмітки:", err.message);
-                        return res.json({ success: false, message: '❌ Помилка запису' });
-                    }
-                    
-                    console.log("✅ ВІДМІТКУ УСПІШНО ЗБЕРЕЖЕНО!");
-                    console.log("   ID запису:", this.lastID);
-                    console.log("   Працівник:", employee);
-                    console.log("   Час:", new Date().toLocaleString());
-                    console.log("=====================================\n");
-                    
-                    res.json({ 
-                        success: true, 
-                        message: '✅ Прихід зафіксовано' 
-                    });
-                }
-            );
+        // Записуємо прихід
+        const result = await db.collection("attendance").insertOne({
+            employee_name: employee,
+            token: token,
+            latitude: latitude,
+            longitude: longitude,
+            check_in_time: new Date()
         });
-    });
+
+        console.log("✅ ВІДМІТКУ УСПІШНО ЗБЕРЕЖЕНО!");
+        console.log("   ID запису:", result.insertedId);
+        console.log("   Працівник:", employee);
+        console.log("   Час:", new Date().toLocaleString());
+        console.log("=====================================\n");
+
+        res.json({ 
+            success: true, 
+            message: '✅ Прихід зафіксовано' 
+        });
+
+    } catch (error) {
+        console.error("❌ ПОМИЛКА:", error);
+        res.json({ 
+            success: false, 
+            message: '❌ Помилка сервера: ' + error.message 
+        });
+    }
 });
 
 // =====================================
 // 6. Перегляд відміток
 // =====================================
-app.get('/api/attendance', (req, res) => {
-    db.all('SELECT * FROM attendance ORDER BY check_in_time DESC', [], (err, rows) => {
-        if (err) {
-            res.json({ error: err.message });
-        } else {
-            console.log(`📊 Запит списку відміток: ${rows.length} записів`);
-            res.json(rows);
-        }
-    });
+app.get('/api/attendance', async (req, res) => {
+    try {
+        const attendance = await db.collection("attendance")
+            .find({})
+            .sort({ check_in_time: -1 })
+            .toArray();
+        
+        console.log(`📊 Запит списку відміток: ${attendance.length} записів`);
+        res.json(attendance);
+    } catch (error) {
+        res.json({ error: error.message });
+    }
 });
 
 // =====================================
-// 7. Головна сторінка
+// 7. Тестовий ендпоінт для перевірки БД
+// =====================================
+app.get('/api/test-db', async (req, res) => {
+    try {
+        const tokensCount = await db.collection("tokens").countDocuments();
+        const attendanceCount = await db.collection("attendance").countDocuments();
+        
+        // Покажемо останні 5 токенів
+        const recentTokens = await db.collection("tokens")
+            .find({})
+            .sort({ created_at: -1 })
+            .limit(5)
+            .toArray();
+        
+        res.json({
+            status: 'connected',
+            database: 'MongoDB Atlas',
+            tokens: {
+                total: tokensCount,
+                recent: recentTokens
+            },
+            attendance: {
+                total: attendanceCount
+            },
+            note: 'Дані тепер зберігаються постійно! 🎉'
+        });
+    } catch (error) {
+        res.json({ error: error.message });
+    }
+});
+
+// =====================================
+// 8. Головна сторінка
 // =====================================
 app.get('/', (req, res) => {
     res.send(`
@@ -225,21 +275,9 @@ app.get('/', (req, res) => {
             <li><a href="/qr.html">📱 Сторінка з QR-кодом</a></li>
             <li><a href="/check.html?token=test">👤 Сторінка відмітки (тест)</a></li>
             <li><a href="/api/attendance">📊 Переглянути всі відмітки (JSON)</a></li>
+            <li><a href="/api/test-db">🔍 Перевірити стан бази даних</a></li>
         </ul>
     `);
-});
-
-// =====================================
-// 8. Перевірка статусу
-// =====================================
-app.get('/api/status', (req, res) => {
-    db.get('SELECT COUNT(*) as count FROM tokens', [], (err, row) => {
-        res.json({
-            status: 'online',
-            time: new Date().toISOString(),
-            tokens_count: row ? row.count : 0
-        });
-    });
 });
 
 // =====================================
@@ -250,5 +288,6 @@ app.listen(PORT, () => {
     console.log(`🌍 Доступний за адресою: https://work-ibj8.onrender.com`);
     console.log(`📱 QR сторінка: https://work-ibj8.onrender.com/qr.html`);
     console.log(`👤 Check-in: https://work-ibj8.onrender.com/check.html?token=test`);
-    console.log(`📊 Відмітки: https://work-ibj8.onrender.com/api/attendance\n`);
+    console.log(`📊 Відмітки: https://work-ibj8.onrender.com/api/attendance`);
+    console.log(`🔍 Тест БД: https://work-ibj8.onrender.com/api/test-db\n`);
 });
