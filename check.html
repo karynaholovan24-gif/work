@@ -34,6 +34,16 @@ box-shadow:0 15px 35px rgba(0,0,0,0.2);
 
 h2{
 margin-bottom:20px;
+color:#333;
+}
+
+select{
+width:100%;
+padding:12px;
+margin-bottom:20px;
+border-radius:8px;
+border:1px solid #ccc;
+font-size:16px;
 }
 
 button{
@@ -46,19 +56,43 @@ color:white;
 font-size:16px;
 cursor:pointer;
 transition:0.3s;
+margin-bottom:10px;
 }
 
 button:hover{
 background:#5a67d8;
 }
 
+button:disabled{
+background:#ccc;
+cursor:not-allowed;
+}
+
 .status{
 margin-top:20px;
 font-size:14px;
+padding:10px;
+border-radius:8px;
 }
 
-.success{color:green;}
-.error{color:red;}
+.success{
+color:green;
+background:#e8f5e8;
+}
+
+.error{
+color:red;
+background:#ffe8e8;
+}
+
+.debug-info{
+margin-top:20px;
+font-size:12px;
+color:#999;
+text-align:left;
+border-top:1px solid #eee;
+padding-top:10px;
+}
 
 </style>
 </head>
@@ -67,92 +101,130 @@ font-size:14px;
 <div class="container">
 
 <h2>Відмітити прихід</h2>
+    
+<select id="employee">
+<option value="">Оберіть працівника</option>
+<option value="Іван">Іван</option>
+<option value="Марія">Марія</option>
+<option value="Олег">Олег</option>
+<option value="Анна">Анна</option>
+<option value="Петро">Петро</option>
+<option value="Олена">Олена</option>
+</select>
 
 <button onclick="markArrival()" id="checkBtn">
-Відмітити
+Відмітити прихід
 </button>
 
 <div class="status" id="status"></div>
+
+<!-- Додамо приховану інформацію для дебагу -->
+<div class="debug-info" id="debug"></div>
 
 </div>
 
 <script>
 
-/* ===============================
-   1. Перевірка token у URL
-================================ */
+const params = new URLSearchParams(window.location.search);
+const token = params.get("token");
+const statusDiv = document.getElementById("status");
+const debugDiv = document.getElementById("debug");
+const button = document.getElementById("checkBtn");
 
-const params = new URLSearchParams(window.location.search)
-const token = params.get("token")
+// Показуємо токен для перевірки
+debugDiv.innerHTML = `Токен: ${token ? token : 'відсутній'}`;
 
-const status = document.getElementById("status")
-const button = document.getElementById("checkBtn")
-
-if(!token){
-status.innerHTML = "❌ Немає доступу (відсутній token)"
-status.className="status error"
-button.disabled = true
+if (!token) {
+    statusDiv.innerHTML = "❌ Немає доступу (відсутній token)";
+    statusDiv.className = "status error";
+    button.disabled = true;
 }
 
-/* ===============================
-   2. Функція відмітки
-================================ */
+function markArrival() {
+    const employeeSelect = document.getElementById("employee");
+    const employee = employeeSelect.value;
 
-function markArrival(){
+    // Перевіряємо чи вибрано працівника
+    if (!employee) {
+        statusDiv.innerHTML = "❌ Оберіть працівника зі списку";
+        statusDiv.className = "status error";
+        return;
+    }
 
-status.innerHTML = "Отримання геолокації..."
+    statusDiv.innerHTML = "⏳ Отримання геолокації...";
+    statusDiv.className = "status";
 
-if(!navigator.geolocation){
-status.innerHTML = "Геолокація не підтримується"
-status.className="status error"
-return
-}
+    if (!navigator.geolocation) {
+        statusDiv.innerHTML = "❌ Геолокація не підтримується браузером";
+        statusDiv.className = "status error";
+        return;
+    }
 
-navigator.geolocation.getCurrentPosition(position=>{
+    // Отримуємо геолокацію
+    navigator.geolocation.getCurrentPosition(
+        (position) => {
+            const data = {
+                token: token,
+                employee: employee,
+                latitude: position.coords.latitude,
+                longitude: position.coords.longitude
+            };
 
-const data={
-token:token,
-latitude:position.coords.latitude,
-longitude:position.coords.longitude,
-time:new Date().toISOString()
-}
+            // Показуємо що відправляємо
+            console.log("Відправляю дані:", data);
+            debugDiv.innerHTML = `Відправляю: ${JSON.stringify(data)}`;
 
-/* ===============================
-   3. Відправка на сервер
-================================ */
+            statusDiv.innerHTML = "⏳ Відправка даних...";
 
-fetch("/api/check-in",{
-method:"POST",
-headers:{
-"Content-Type":"application/json"
-},
-body:JSON.stringify(data)
-})
-.then(res=>res.json())
-.then(response=>{
-
-if(response.success){
-status.innerHTML="✅ Прихід зафіксовано"
-status.className="status success"
-button.disabled=true
-}
-else{
-status.innerHTML="❌ "+response.message
-status.className="status error"
-}
-
-})
-.catch(()=>{
-status.innerHTML="❌ Помилка сервера"
-status.className="status error"
-})
-
-},
-()=>{
-status.innerHTML="❌ Не вдалося отримати геолокацію"
-status.className="status error"
-})
-
+            // Відправляємо на сервер
+            fetch("/api/check-in", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify(data)
+            })
+            .then(res => res.json())
+            .then(response => {
+                console.log("Відповідь сервера:", response);
+                debugDiv.innerHTML += `<br>Відповідь: ${JSON.stringify(response)}`;
+                
+                if (response.success) {
+                    statusDiv.innerHTML = "✅ " + response.message;
+                    statusDiv.className = "status success";
+                    button.disabled = true;
+                } else {
+                    statusDiv.innerHTML = "❌ " + response.message;
+                    statusDiv.className = "status error";
+                }
+            })
+            .catch(error => {
+                console.error("Помилка:", error);
+                statusDiv.innerHTML = "❌ Помилка з'єднання з сервером";
+                statusDiv.className = "status error";
+            });
+        },
+        (error) => {
+            console.error("Помилка геолокації:", error);
+            let errorMessage = "❌ Не вдалося отримати геолокацію";
+            
+            if (error.code === 1) {
+                errorMessage = "❌ Ви заборонили доступ до геолокації. Дозвольте в налаштуваннях браузера";
+            } else if (error.code === 2) {
+                errorMessage = "❌ Мережева помилка. Перевірте з'єднання";
+            } else if (error.code === 3) {
+                errorMessage = "❌ Час очікування геолокації вичерпано";
+            }
+            
+            statusDiv.innerHTML = errorMessage;
+            statusDiv.className = "status error";
+        },
+        {
+            enableHighAccuracy: true,
+            timeout: 10000,
+            maximumAge: 0
+        }
+    );
 }
 
 </script>
