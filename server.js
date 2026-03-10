@@ -11,7 +11,7 @@ const app = express();
 // =====================================
 process.env.TZ = 'Europe/Kiev';
 console.log('🕐 Часовий пояс:', process.env.TZ);
-console.log('🕐 Поточний час:', new Date().toLocaleString('uk-UA', { timeZone: 'Europe/Kiev' }));
+console.log('🕐 Поточний час:', new Date().toLocaleString('uk-UA', { timeZone: 'Europe/Kyiv' }));
 
 const PORT = process.env.PORT || 3000;
 
@@ -428,3 +428,4 @@ app.listen(PORT, () => {
     console.log(`📊 Відмітки: https://work-ibj8.onrender.com/api/attendance`);
     console.log(`🧪 Тест: https://work-ibj8.onrender.com/api/test/test123\n`);
 });
+
