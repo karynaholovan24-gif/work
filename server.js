@@ -8,55 +8,6 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // =====================================
-// Функція для конвертації в київський час (+2 години)
-// =====================================
-function toKyivTime(utcTime) {
-    const date = new Date(utcTime);
-    
-    // Отримуємо компоненти UTC
-    let year = date.getUTCFullYear();
-    let month = date.getUTCMonth() + 1;
-    let day = date.getUTCDate();
-    let hours = date.getUTCHours();
-    let minutes = date.getUTCMinutes();
-    let seconds = date.getUTCSeconds();
-    
-    // Додаємо 2 години (київський час взимку)
-    hours += 2;
-    
-    // Якщо перейшли на наступний день
-    if (hours >= 24) {
-        hours -= 24;
-        day += 1;
-        
-        // Перевіряємо чи не перейшли на наступний місяць
-        if (month === 2) { // лютий
-            const isLeap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
-            const daysInMonth = isLeap ? 29 : 28;
-            if (day > daysInMonth) {
-                day = 1;
-                month += 1;
-            }
-        } else if ([4, 6, 9, 11].includes(month)) { // місяці з 30 днями
-            if (day > 30) {
-                day = 1;
-                month += 1;
-            }
-        } else if (day > 31) { // місяці з 31 днем
-            day = 1;
-            month += 1;
-            if (month > 12) {
-                month = 1;
-                year += 1;
-            }
-        }
-    }
-    
-    // Форматуємо
-    return `${day.toString().padStart(2, '0')}.${month.toString().padStart(2, '0')}.${year} ${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-}
-
-// =====================================
 // Тимчасове сховище токенів
 // =====================================
 const activeTokens = new Set();
@@ -129,7 +80,7 @@ app.get('/api/generate-token', (req, res) => {
 });
 
 // =====================================
-// 6. Відмітка приходу
+// 6. Відмітка приходу (Токени знаходяться!)
 // =====================================
 app.post('/api/check-in', (req, res) => {
     const { token, employee } = req.body;
@@ -141,18 +92,31 @@ app.post('/api/check-in', (req, res) => {
         return res.json({ success: false, message: '❌ Немає даних' });
     }
     
+    // Спочатку перевіряємо в пам'яті
     if (activeTokens.has(token)) {
-        console.log('✅ Токен знайдено!');
+        console.log('✅ Токен знайдено в пам\'яті!');
         
         activeTokens.delete(token);
         db.run('DELETE FROM tokens WHERE token = ?', [token]);
         db.run('INSERT INTO attendance (employee, token) VALUES (?, ?)', [employee, token]);
         
-        res.json({ success: true, message: '✅ Прихід зафіксовано' });
-    } else {
-        console.log('❌ Токен не знайдено');
-        res.json({ success: false, message: '❌ Токен не знайдено' });
+        return res.json({ success: true, message: '✅ Прихід зафіксовано' });
     }
+    
+    // Якщо нема в пам'яті, перевіряємо в базі
+    db.get('SELECT token FROM tokens WHERE token = ?', [token], (err, row) => {
+        if (row) {
+            console.log('✅ Токен знайдено в базі даних!');
+            
+            db.run('DELETE FROM tokens WHERE token = ?', [token]);
+            db.run('INSERT INTO attendance (employee, token) VALUES (?, ?)', [employee, token]);
+            
+            res.json({ success: true, message: '✅ Прихід зафіксовано' });
+        } else {
+            console.log('❌ Токен не знайдено ніде');
+            res.json({ success: false, message: '❌ Токен не знайдено' });
+        }
+    });
 });
 
 // =====================================
@@ -168,86 +132,35 @@ app.get('/api/tokens', (req, res) => {
 });
 
 // =====================================
-// 8. Перегляд відміток (З КИЇВСЬКИМ ЧАСОМ)
+// 8. Перегляд відміток (оригінальний час)
 // =====================================
 app.get('/api/attendance', (req, res) => {
     db.all('SELECT * FROM attendance ORDER BY time DESC', [], (err, rows) => {
-        if (rows) {
-            rows = rows.map(row => {
-                return {
-                    id: row.id,
-                    employee: row.employee,
-                    token: row.token,
-                    time: toKyivTime(row.time)  // Конвертуємо час
-                };
-            });
-        }
         res.json(rows || []);
     });
 });
 
 // =====================================
-// 9. Статус
-// =====================================
-app.get('/api/status', (req, res) => {
-    const now = new Date();
-    res.json({
-        memory_tokens: activeTokens.size,
-        current_time: toKyivTime(now.toISOString())
-    });
-});
-
-// =====================================
-// 10. Головна сторінка
+// 9. Головна сторінка
 // =====================================
 app.get('/', (req, res) => {
-    const now = new Date();
     res.send(`
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Система обліку часу</title>
-            <style>
-                body { font-family: Arial; padding: 40px; background: linear-gradient(135deg, #667eea, #764ba2); color: white; }
-                .container { max-width: 800px; margin: 0 auto; background: rgba(255,255,255,0.1); padding: 30px; border-radius: 15px; }
-                h1 { margin-bottom: 20px; }
-                ul { list-style: none; padding: 0; }
-                li { margin: 15px 0; }
-                a { color: white; text-decoration: none; padding: 10px 20px; background: rgba(255,255,255,0.2); border-radius: 8px; display: inline-block; }
-                a:hover { background: rgba(255,255,255,0.3); }
-                .info { margin-top: 20px; padding: 15px; background: rgba(0,0,0,0.3); border-radius: 8px; }
-                .note { color: #ffaa00; font-weight: bold; }
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <h1>✅ Система обліку часу</h1>
-                <p>Сервер працює з <span class="note">київським часом (+2 години)</span></p>
-                <div class="info">
-                    <p>🕐 Поточний час: ${toKyivTime(now.toISOString())}</p>
-                    <p class="note">⚠️ 30 березня 2026 потрібно змінити +2 на +3 (перехід на літній час)</p>
-                    <p>🔹 Тестові токени: test123, demo456, admin789, qr2024, work001</p>
-                </div>
-                <ul>
-                    <li><a href="/qr.html">📱 QR код для сканування</a></li>
-                    <li><a href="/api/tokens">🔑 Перегляд всіх токенів</a></li>
-                    <li><a href="/api/attendance">📊 Всі відмітки (київський час)</a></li>
-                    <li><a href="/api/status">📈 Статус системи</a></li>
-                </ul>
-            </div>
-        </body>
-        </html>
+        <h1>Система обліку часу</h1>
+        <ul>
+            <li><a href="/qr.html">📱 QR код</a></li>
+            <li><a href="/api/tokens">🔑 Токени</a></li>
+            <li><a href="/api/attendance">📊 Відмітки</a></li>
+        </ul>
     `);
 });
 
 // =====================================
-// 11. Запуск сервера
+// 10. Запуск
 // =====================================
 app.listen(PORT, () => {
     console.log(`\n🚀 Сервер запущено на порту ${PORT}`);
     console.log(`🌍 https://work-ibj8.onrender.com`);
     console.log(`📱 QR сторінка: https://work-ibj8.onrender.com/qr.html`);
     console.log(`🔑 Токени: https://work-ibj8.onrender.com/api/tokens`);
-    console.log(`📊 Відмітки: https://work-ibj8.onrender.com/api/attendance`);
-    console.log(`🕐 Поточний час: ${toKyivTime(new Date().toISOString())}\n`);
+    console.log(`📊 Відмітки: https://work-ibj8.onrender.com/api/attendance\n`);
 });
