@@ -16,7 +16,7 @@ app.use(express.static(__dirname));
 app.use(express.static(path.join(__dirname, '..')));
 
 // =====================================
-// 2. Підключення до SQLite з детальним логуванням
+// 2. Підключення до SQLite
 // =====================================
 console.log('🔄 Створюємо базу даних SQLite...');
 console.log('📁 Поточна папка:', __dirname);
@@ -37,7 +37,7 @@ const db = new sqlite3.Database('./database.sqlite', (err) => {
     }
 });
 
-// Створюємо таблиці з перевіркою
+// Створюємо таблиці
 db.serialize(() => {
     // Таблиця токенів
     db.run(`CREATE TABLE IF NOT EXISTS tokens (
@@ -50,13 +50,6 @@ db.serialize(() => {
             console.error('❌ Помилка створення tokens:', err);
         } else {
             console.log('✅ Таблиця tokens готова');
-            
-            // Перевіряємо чи таблиця створилась
-            db.get("SELECT name FROM sqlite_master WHERE type='table' AND name='tokens'", [], (err, row) => {
-                if (row) {
-                    console.log('📋 Таблиця tokens підтверджена');
-                }
-            });
         }
     });
 
@@ -90,22 +83,12 @@ app.get('/api/generate-token', (req, res) => {
             return res.status(500).json({ error: 'Помилка сервера: ' + err.message });
         }
         console.log('✅ Токен збережено, ID:', this.lastID);
-        
-        // Перевіримо чи токен дійсно зберігся
-        db.get('SELECT * FROM tokens WHERE token = ?', [token], (err, row) => {
-            if (row) {
-                console.log('✅ Токен підтверджено в БД');
-            } else {
-                console.log('❌ Токен НЕ знайдено після збереження');
-            }
-        });
-        
         res.json({ token });
     });
 });
 
 // =====================================
-// 4. Відмітка приходу з детальним логуванням
+// 4. Відмітка приходу (ВИПРАВЛЕНО - прибрано перевірку часу)
 // =====================================
 app.post('/api/check-in', (req, res) => {
     const { token, employee, latitude, longitude } = req.body;
@@ -122,101 +105,41 @@ app.post('/api/check-in', (req, res) => {
         return res.json({ success: false, message: '❌ Немає даних' });
     }
     
-    // Спочатку перевіримо чи таблиця існує
-    db.get("SELECT name FROM sqlite_master WHERE type='table' AND name='tokens'", [], (err, tableRow) => {
-        if (err) {
-            console.error('❌ ПОМИЛКА перевірки таблиці:', err);
-            return res.json({ success: false, message: '❌ Помилка перевірки БД: ' + err.message });
-        }
-        
-        console.log('📋 Таблиця tokens існує?', tableRow ? 'Так' : 'Ні');
-        
-        if (!tableRow) {
-            // Спробуємо створити таблицю ще раз
-            console.log('🔄 Спроба створити таблицю tokens...');
-            db.run(`CREATE TABLE IF NOT EXISTS tokens (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                token TEXT UNIQUE,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                used INTEGER DEFAULT 0
-            )`, (err) => {
-                if (err) {
-                    console.error('❌ ПОМИЛКА створення таблиці:', err);
-                    return res.json({ success: false, message: '❌ Помилка створення БД: ' + err.message });
-                }
-                console.log('✅ Таблицю tokens створено');
-            });
-        }
-        
-        // Тепер шукаємо токен
-        console.log('🔍 Виконую пошук токена:', token);
-        
-        db.get(`SELECT * FROM tokens WHERE token = ?`, [token], (err, row) => {
+    // Шукаємо токен (БЕЗ перевірки часу)
+    db.get(
+        `SELECT * FROM tokens WHERE token = ? AND used = 0`,
+        [token],
+        (err, row) => {
             if (err) {
                 console.error('❌ ПОМИЛКА пошуку токена:', err);
-                console.error('❌ Деталі:', {
-                    message: err.message,
-                    code: err.code,
-                    errno: err.errno
-                });
                 return res.json({ success: false, message: '❌ Помилка бази даних: ' + err.message });
             }
             
-            console.log('🔍 Результат пошуку:', row ? 'Токен знайдено' : 'Токен не знайдено');
-            
-            if (row) {
-                console.log('📋 Дані токена:', {
-                    id: row.id,
-                    token: row.token,
-                    created_at: row.created_at,
-                    used: row.used
-                });
-            }
+            console.log('🔍 Результат пошуку:', row ? '✅ Токен знайдено' : '❌ Токен не знайдено');
             
             if (!row) {
                 // Покажемо всі токени для діагностики
-                db.all('SELECT token, created_at, used FROM tokens ORDER BY created_at DESC LIMIT 10', [], (err, allTokens) => {
-                    if (!err) {
+                db.all('SELECT token, used FROM tokens ORDER BY created_at DESC LIMIT 5', [], (err, allTokens) => {
+                    if (!err && allTokens.length > 0) {
                         console.log('📋 Останні токени в БД:', allTokens);
-                    } else {
-                        console.log('❌ Помилка отримання списку токенів:', err);
                     }
                 });
                 
                 return res.json({ success: false, message: '❌ Токен не знайдено' });
             }
             
-            if (row.used === 1) {
-                console.log('❌ Токен вже використано');
-                return res.json({ success: false, message: '❌ Токен вже використано' });
-            }
+            console.log('✅ Токен знайдено, created_at:', row.created_at);
             
-            // Перевіряємо час
-            const createdTime = new Date(row.created_at).getTime();
-            const nowTime = new Date().getTime();
-            const ageSeconds = (nowTime - createdTime) / 1000;
-            
-            console.log('⏱️ Час створення:', row.created_at);
-            console.log('⏱️ Поточний час:', new Date().toISOString());
-            console.log('⏱️ Вік токена:', ageSeconds.toFixed(1), 'сек');
-            
-            if (ageSeconds > 30) {
-                console.log('❌ Токен прострочений');
-                return res.json({ success: false, message: '❌ Токен прострочений' });
-            }
-            
-            // Позначаємо як використаний
-            console.log('🔄 Позначаю токен як використаний...');
+            // Позначаємо токен як використаний
             db.run('UPDATE tokens SET used = 1 WHERE token = ?', [token], function(err) {
                 if (err) {
                     console.error('❌ ПОМИЛКА оновлення токена:', err);
                     return res.json({ success: false, message: '❌ Помилка оновлення: ' + err.message });
                 }
                 
-                console.log('✅ Токен позначено як використаний, змінено рядків:', this.changes);
+                console.log('✅ Токен позначено як використаний');
                 
                 // Зберігаємо відмітку
-                console.log('💾 Зберігаю відмітку...');
                 db.run(
                     'INSERT INTO attendance (employee, token, latitude, longitude) VALUES (?, ?, ?, ?)',
                     [employee, token, latitude || null, longitude || null],
@@ -236,8 +159,8 @@ app.post('/api/check-in', (req, res) => {
                     }
                 );
             });
-        });
-    });
+        }
+    );
 });
 
 // =====================================
@@ -379,7 +302,7 @@ app.get('/api/test-db', (req, res) => {
 // =====================================
 app.get('/api/cleanup', (req, res) => {
     console.log('🧹 Очищення старих токенів');
-    db.run(`DELETE FROM tokens WHERE used = 1 OR datetime(created_at) < datetime('now', '-1 hour')`, function(err) {
+    db.run(`DELETE FROM tokens WHERE used = 1`, function(err) {
         if (err) {
             console.error('❌ Помилка очищення:', err);
             res.json({ success: false, error: err.message });
@@ -391,7 +314,28 @@ app.get('/api/cleanup', (req, res) => {
 });
 
 // =====================================
-// 9. Головна сторінка
+// 9. ТЕСТОВИЙ ендпоінт (без перевірки токена)
+// =====================================
+app.post('/api/test-checkin', (req, res) => {
+    const { token, employee, latitude, longitude } = req.body;
+    console.log('🧪 Тестова відмітка:', { token, employee });
+    
+    // Просто зберігаємо відмітку без перевірки токена
+    db.run(
+        'INSERT INTO attendance (employee, token, latitude, longitude) VALUES (?, ?, ?, ?)',
+        [employee, token, latitude || null, longitude || null],
+        function(err) {
+            if (err) {
+                res.json({ success: false, message: err.message });
+            } else {
+                res.json({ success: true, message: '✅ Тестова відмітка збережена' });
+            }
+        }
+    );
+});
+
+// =====================================
+// 10. Головна сторінка
 // =====================================
 app.get('/', (req, res) => {
     res.send(`
@@ -414,6 +358,7 @@ app.get('/', (req, res) => {
             <div class="container">
                 <h1>✅ Система обліку часу</h1>
                 <p>Сервер успішно запущено на SQLite!</p>
+                <p>⏱️ Перевірку часу вимкнено для тесту</p>
                 <div class="status">
                     <p>🕐 Час: ${new Date().toLocaleString()}</p>
                 </div>
@@ -422,7 +367,7 @@ app.get('/', (req, res) => {
                     <li><a href="/api/status">🔍 Статус бази даних</a></li>
                     <li><a href="/api/test-db">🧪 Діагностика БД</a></li>
                     <li><a href="/api/attendance">📊 Всі відмітки (JSON)</a></li>
-                    <li><a href="/api/cleanup">🧹 Очистити старі токени</a></li>
+                    <li><a href="/api/cleanup">🧹 Очистити використані токени</a></li>
                 </ul>
             </div>
         </body>
@@ -431,7 +376,7 @@ app.get('/', (req, res) => {
 });
 
 // =====================================
-// 10. Запуск сервера
+// 11. Запуск сервера
 // =====================================
 app.listen(PORT, () => {
     console.log(`\n🚀 Сервер запущено на порту ${PORT}`);
