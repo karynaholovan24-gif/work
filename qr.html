@@ -52,7 +52,7 @@
 </head>
 <body>
     <div class="container">
-        <h1>📱 Скануйте для відмітки</h1>
+        <h1>Скануйте для відмітки</h1>
         <div id="qrcode"></div>
         <div class="time" id="time"></div>
         <div class="info">QR оновлюється кожні 30 секунд</div>
@@ -64,7 +64,6 @@
         function generateQR() {
             const token = Math.random().toString(36).substring(2, 10);
             
-            // ✅ ВИПРАВЛЕНО: правильне посилання
             const url = `https://work-ibj8.onrender.com/check.html?token=${token}`;
             
             console.log('🔗 Створено посилання:', url);
