@@ -37,16 +37,16 @@ const db = new sqlite3.Database('./database.sqlite', (err) => {
     }
 });
 
-// Створюємо таблиці
+// =====================================
+// 3. Створюємо таблиці (ПОВНІСТЮ ПЕРЕСТВОРЮЄМО)
+// =====================================
 db.serialize(() => {
-    // Видаляємо стару таблицю (тільки для виправлення)
-    db.run(`DROP TABLE IF EXISTS tokens`, (err) => {
-        if (err) console.error('❌ Помилка видалення:', err);
-        else console.log('✅ Стару таблицю tokens видалено');
-    });
+    // Видаляємо старі таблиці
+    db.run(`DROP TABLE IF EXISTS tokens`);
+    db.run(`DROP TABLE IF EXISTS attendance`);
     
-    // Створюємо нову таблицю tokens з колонкою used
-    db.run(`CREATE TABLE IF NOT EXISTS tokens (
+    // Створюємо нову таблицю tokens
+    db.run(`CREATE TABLE tokens (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         token TEXT UNIQUE,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -55,12 +55,12 @@ db.serialize(() => {
         if (err) {
             console.error('❌ Помилка створення tokens:', err);
         } else {
-            console.log('✅ Таблиця tokens готова (з колонкою used)');
+            console.log('✅ Таблиця tokens створена');
         }
     });
 
-    // Таблиця відміток
-    db.run(`CREATE TABLE IF NOT EXISTS attendance (
+    // Створюємо таблицю attendance
+    db.run(`CREATE TABLE attendance (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         employee TEXT,
         token TEXT,
@@ -71,13 +71,13 @@ db.serialize(() => {
         if (err) {
             console.error('❌ Помилка створення attendance:', err);
         } else {
-            console.log('✅ Таблиця attendance готова');
+            console.log('✅ Таблиця attendance створена');
         }
     });
 });
 
 // =====================================
-// 3. Генерація токена
+// 4. Генерація токена
 // =====================================
 app.get('/api/generate-token', (req, res) => {
     const token = Math.random().toString(36).substring(2, 10);
@@ -94,15 +94,13 @@ app.get('/api/generate-token', (req, res) => {
 });
 
 // =====================================
-// 4. Відмітка приходу (З ДЕТАЛЬНИМ ЛОГУВАННЯМ)
+// 5. Відмітка приходу (ТИМЧАСОВО без перевірки used)
 // =====================================
 app.post('/api/check-in', (req, res) => {
     const { token, employee, latitude, longitude } = req.body;
     
     console.log('\n📝 ===== НОВА ВІДМІТКА =====');
-    console.log('🔍 Отриманий token в запиті:', token);
-    console.log('🔍 Тип token:', typeof token);
-    console.log('🔍 Довжина token:', token?.length);
+    console.log('🔍 Отриманий token:', token);
     console.log('🔍 Employee:', employee);
     console.log('🔍 Latitude:', latitude);
     console.log('🔍 Longitude:', longitude);
@@ -113,16 +111,16 @@ app.post('/api/check-in', (req, res) => {
         return res.json({ success: false, message: '❌ Немає даних' });
     }
     
-    // Покажемо всі доступні токени для порівняння
-    db.all('SELECT token, used FROM tokens WHERE used = 0', [], (err, rows) => {
+    // Покажемо всі доступні токени
+    db.all('SELECT token FROM tokens', [], (err, rows) => {
         if (!err) {
-            console.log('📋 Доступні токени в БД (невикористані):', rows.map(r => r.token));
+            console.log('📋 Всі токени в БД:', rows.map(r => r.token));
         }
     });
     
-    // Шукаємо токен
+    // Шукаємо токен (ТИМЧАСОВО без перевірки used)
     db.get(
-        `SELECT * FROM tokens WHERE token = ? AND used = 0`,
+        `SELECT * FROM tokens WHERE token = ?`,
         [token],
         (err, row) => {
             if (err) {
@@ -133,17 +131,7 @@ app.post('/api/check-in', (req, res) => {
             console.log('🔍 Результат пошуку:', row ? '✅ Токен знайдено' : '❌ Токен не знайдено');
             
             if (!row) {
-                // Перевіримо чи є токен в базі взагалі (можливо вже використаний)
-                db.get('SELECT * FROM tokens WHERE token = ?', [token], (err, usedRow) => {
-                    if (usedRow) {
-                        console.log('⚠️ Токен знайдено, але він вже використаний (used=1)');
-                        return res.json({ success: false, message: '❌ Токен вже використано' });
-                    } else {
-                        console.log('⚠️ Токен взагалі не знайдено в базі');
-                        return res.json({ success: false, message: '❌ Токен не знайдено' });
-                    }
-                });
-                return;
+                return res.json({ success: false, message: '❌ Токен не знайдено' });
             }
             
             console.log('✅ Токен знайдено, створено:', row.created_at);
@@ -183,7 +171,7 @@ app.post('/api/check-in', (req, res) => {
 });
 
 // =====================================
-// 5. Перегляд відміток
+// 6. Перегляд відміток
 // =====================================
 app.get('/api/attendance', (req, res) => {
     console.log('📊 Запит списку відміток');
@@ -199,7 +187,7 @@ app.get('/api/attendance', (req, res) => {
 });
 
 // =====================================
-// 6. Перегляд всіх токенів
+// 7. Перегляд всіх токенів
 // =====================================
 app.get('/api/tokens', (req, res) => {
     db.all('SELECT * FROM tokens ORDER BY created_at DESC', [], (err, rows) => {
@@ -212,7 +200,7 @@ app.get('/api/tokens', (req, res) => {
 });
 
 // =====================================
-// 7. Статус БД
+// 8. Статус БД
 // =====================================
 app.get('/api/status', (req, res) => {
     console.log('🔍 Запит статусу БД');
@@ -249,7 +237,7 @@ app.get('/api/status', (req, res) => {
 });
 
 // =====================================
-// 8. Діагностика БД
+// 9. Діагностика БД
 // =====================================
 app.get('/api/test-db', (req, res) => {
     console.log('🧪 Запуск діагностики БД...');
@@ -259,7 +247,7 @@ app.get('/api/test-db', (req, res) => {
         checks: {}
     };
     
-    // Перевіряємо чи можна писати в файл
+    // Перевіряємо права на запис
     try {
         fs.accessSync(__dirname, fs.constants.W_OK);
         results.checks.write_access = true;
@@ -270,7 +258,7 @@ app.get('/api/test-db', (req, res) => {
         console.log('❌ Немає прав на запис:', err);
     }
     
-    // Перевіряємо чи існує файл БД
+    // Перевіряємо файл БД
     try {
         const stats = fs.statSync('./database.sqlite');
         results.checks.db_file_exists = true;
@@ -289,7 +277,7 @@ app.get('/api/test-db', (req, res) => {
             results.checks.tables = 'Таблиці існують';
         }
         
-        // Спробуємо вставити тестовий токен
+        // Тестова вставка токена
         const testToken = 'test_' + Date.now();
         console.log('🔄 Тестова вставка токена:', testToken);
         
@@ -301,7 +289,7 @@ app.get('/api/test-db', (req, res) => {
                 results.checks.insert_test = '✅ Успішно, ID: ' + this.lastID;
                 console.log('✅ Тестовий токен вставлено');
                 
-                // Спробуємо знайти тестовий токен
+                // Пошук тестового токена
                 db.get('SELECT * FROM tokens WHERE token = ?', [testToken], (err, row) => {
                     if (row) {
                         results.checks.select_test = '✅ Токен знайдено';
@@ -311,13 +299,12 @@ app.get('/api/test-db', (req, res) => {
                         console.log('❌ Тестовий токен не знайдено');
                     }
                     
-                    // Видалимо тестовий токен
+                    // Видалення тестового токена
                     db.run('DELETE FROM tokens WHERE token = ?', [testToken], function(err) {
                         if (!err) {
                             console.log('✅ Тестовий токен видалено');
                         }
                         
-                        // Фінальний звіт
                         results.success = true;
                         results.message = 'Діагностика завершена';
                         console.log('✅ Діагностика завершена');
@@ -330,7 +317,7 @@ app.get('/api/test-db', (req, res) => {
 });
 
 // =====================================
-// 9. Очищення використаних токенів
+// 10. Очищення використаних токенів
 // =====================================
 app.get('/api/cleanup', (req, res) => {
     console.log('🧹 Очищення використаних токенів');
@@ -346,7 +333,7 @@ app.get('/api/cleanup', (req, res) => {
 });
 
 // =====================================
-// 10. ТЕСТОВИЙ ендпоінт
+// 11. Тестовий ендпоінт
 // =====================================
 app.post('/api/test-checkin', (req, res) => {
     const { token, employee, latitude, longitude } = req.body;
@@ -366,7 +353,7 @@ app.post('/api/test-checkin', (req, res) => {
 });
 
 // =====================================
-// 11. Головна сторінка
+// 12. Головна сторінка
 // =====================================
 app.get('/', (req, res) => {
     res.send(`
@@ -389,7 +376,7 @@ app.get('/', (req, res) => {
             <div class="container">
                 <h1>✅ Система обліку часу</h1>
                 <p>Сервер успішно запущено на SQLite!</p>
-                <p>📋 Додано детальне логування для пошуку проблеми</p>
+                <p>🔄 Таблиці перестворено, перевірку used вимкнено</p>
                 <div class="status">
                     <p>🕐 Час: ${new Date().toLocaleString()}</p>
                 </div>
@@ -408,7 +395,7 @@ app.get('/', (req, res) => {
 });
 
 // =====================================
-// 12. Запуск сервера
+// 13. Запуск сервера
 // =====================================
 app.listen(PORT, () => {
     console.log(`\n🚀 Сервер запущено на порту ${PORT}`);
