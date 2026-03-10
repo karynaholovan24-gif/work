@@ -89,22 +89,29 @@ app.get('/api/generate-token', (req, res) => {
 });
 
 // =====================================
-// 5. Відмітка приходу (СПРОЩЕНО)
+// 5. Відмітка приходу (З ДІАГНОСТИКОЮ)
 // =====================================
 app.post('/api/check-in', (req, res) => {
-    const { token, employee } = req.body;
-
-    console.log('\n🔍 Отримано token з QR:', token);
+    const { token, employee, latitude, longitude } = req.body;
+    
+    console.log('\n📝 ===== НОВА ВІДМІТКА =====');
+    console.log('🔍 Отриманий token з QR:', token);
     console.log('👤 Працівник:', employee);
-
+    console.log('📍 Координати:', latitude, longitude);
+    
     if (!token || !employee) {
         return res.json({ success: false, message: '❌ Немає даних' });
     }
-
-    // Перевіряємо чи є токен в базі
-    db.get('SELECT token FROM tokens WHERE token = ?', [token], (err, row) => {
-        if (row) {
-            console.log('✅ Токен ЗНАЙДЕНО в базі!');
+    
+    // Показуємо всі токени в базі
+    db.all('SELECT token FROM tokens', [], (err, rows) => {
+        console.log('📋 Всі токени в БД зараз:', rows.map(r => r.token));
+        
+        // Шукаємо чи є наш токен серед них
+        const found = rows.find(r => r.token === token);
+        
+        if (found) {
+            console.log('✅ Токен Є в базі!');
             
             // Видаляємо використаний токен
             db.run('DELETE FROM tokens WHERE token = ?', [token]);
@@ -114,20 +121,21 @@ app.post('/api/check-in', (req, res) => {
                 [employee, token], 
                 function(err) {
                     if (err) {
+                        console.error('❌ Помилка запису:', err);
                         res.json({ success: false, message: '❌ Помилка запису' });
                     } else {
+                        console.log('✅ Відмітку збережено!');
                         res.json({ success: true, message: '✅ Прихід зафіксовано' });
                     }
                 }
             );
         } else {
-            console.log('❌ Токен НЕ знайдено в базі');
+            console.log('❌ Токен НЕМАЄ в базі');
+            console.log('🔍 Отриманий token:', token);
+            console.log('🔍 Довжина token:', token.length);
+            console.log('🔍 Token в лапках: "' + token + '"');
             
-            // Показуємо всі токени з бази
-            db.all('SELECT token FROM tokens', [], (err, rows) => {
-                console.log('📋 Токени в базі:', rows.map(r => r.token));
-                res.json({ success: false, message: '❌ Токен не знайдено' });
-            });
+            res.json({ success: false, message: '❌ Токен не знайдено' });
         }
     });
 });
@@ -151,7 +159,21 @@ app.get('/api/attendance', (req, res) => {
 });
 
 // =====================================
-// 8. Головна сторінка
+// 8. Статус БД
+// =====================================
+app.get('/api/status', (req, res) => {
+    db.get('SELECT COUNT(*) as count FROM tokens', [], (err, tokenRow) => {
+        db.get('SELECT COUNT(*) as count FROM attendance', [], (err, attRow) => {
+            res.json({ 
+                tokens: tokenRow?.count || 0, 
+                attendance: attRow?.count || 0
+            });
+        });
+    });
+});
+
+// =====================================
+// 9. Головна сторінка
 // =====================================
 app.get('/', (req, res) => {
     res.send(`
@@ -160,12 +182,13 @@ app.get('/', (req, res) => {
             <li><a href="/qr.html">📱 QR код</a></li>
             <li><a href="/api/tokens">🔑 Токени</a></li>
             <li><a href="/api/attendance">📊 Відмітки</a></li>
+            <li><a href="/api/status">📈 Статус</a></li>
         </ul>
     `);
 });
 
 // =====================================
-// 9. Запуск сервера
+// 10. Запуск сервера
 // =====================================
 app.listen(PORT, () => {
     console.log(`\n🚀 Сервер запущено на порту ${PORT}`);
