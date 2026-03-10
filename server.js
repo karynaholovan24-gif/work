@@ -16,7 +16,7 @@ console.log('🕐 Поточний час:', new Date().toLocaleString('uk-UA', 
 const PORT = process.env.PORT || 3000;
 
 // =====================================
-// Тимчасове сховище токенів (не зникає!)
+// Тимчасове сховище токенів
 // =====================================
 const activeTokens = new Set();
 
@@ -242,32 +242,49 @@ app.get('/api/tokens', (req, res) => {
 });
 
 // =====================================
-// 8. Перегляд відміток (АВТОМАТИЧНИЙ київський час)
+// 8. Перегляд відміток (УНІВЕРСАЛЬНИЙ КИЇВСЬКИЙ ЧАС)
 // =====================================
 app.get('/api/attendance', (req, res) => {
     db.all('SELECT * FROM attendance ORDER BY time DESC', [], (err, rows) => {
+        if (err) {
+            console.error('❌ Помилка отримання відміток:', err);
+            return res.json([]);
+        }
+        
         if (rows) {
             rows = rows.map(row => {
-                const utcDate = new Date(row.time);
-                
-                // Автоматичне перетворення в київський час (враховує літо/зиму)
-                const kyivTime = utcDate.toLocaleString('uk-UA', { 
-                    timeZone: 'Europe/Kiev',
-                    year: 'numeric',
-                    month: '2-digit',
-                    day: '2-digit',
-                    hour: '2-digit',
-                    minute: '2-digit',
-                    second: '2-digit',
-                    hour12: false 
-                });
-                
-                return {
-                    id: row.id,
-                    employee: row.employee,
-                    token: row.token,
-                    time: kyivTime
-                };
+                try {
+                    const utcDate = new Date(row.time);
+                    
+                    // Конвертуємо UTC в київський час (автоматично враховує літо/зиму)
+                    const kyivDate = new Date(utcDate.toLocaleString('en-US', { timeZone: 'Europe/Kiev' }));
+                    
+                    // Форматуємо для України
+                    const formattedTime = kyivDate.toLocaleString('uk-UA', {
+                        year: 'numeric',
+                        month: '2-digit',
+                        day: '2-digit',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        second: '2-digit',
+                        hour12: false
+                    });
+                    
+                    return {
+                        id: row.id,
+                        employee: row.employee,
+                        token: row.token,
+                        time: formattedTime
+                    };
+                } catch (e) {
+                    console.error('❌ Помилка конвертації часу:', e);
+                    return {
+                        id: row.id,
+                        employee: row.employee,
+                        token: row.token,
+                        time: row.time
+                    };
+                }
             });
         }
         res.json(rows || []);
@@ -371,7 +388,7 @@ app.get('/', (req, res) => {
         <body>
             <div class="container">
                 <h1>✅ Система обліку часу</h1>
-                <p>Сервер працює з <span class="success">автоматичним київським часом</span></p>
+                <p>Сервер працює з <span class="success">універсальним київським часом</span></p>
                 <div class="info">
                     <p>🕐 Поточний час: ${now.toLocaleString('uk-UA', { 
                         timeZone: 'Europe/Kiev',
