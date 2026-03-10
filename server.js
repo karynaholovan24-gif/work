@@ -37,9 +37,15 @@ const db = new sqlite3.Database('./database.sqlite', (err) => {
     }
 });
 
-// Створюємо таблиці
+// Створюємо таблиці (ВИПРАВЛЕНО)
 db.serialize(() => {
-    // Таблиця токенів
+    // Видаляємо стару таблицю (тільки для виправлення)
+    db.run(`DROP TABLE IF EXISTS tokens`, (err) => {
+        if (err) console.error('❌ Помилка видалення:', err);
+        else console.log('✅ Стару таблицю tokens видалено');
+    });
+    
+    // Створюємо нову таблицю tokens з колонкою used
     db.run(`CREATE TABLE IF NOT EXISTS tokens (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         token TEXT UNIQUE,
@@ -49,7 +55,7 @@ db.serialize(() => {
         if (err) {
             console.error('❌ Помилка створення tokens:', err);
         } else {
-            console.log('✅ Таблиця tokens готова');
+            console.log('✅ Таблиця tokens готова (з колонкою used)');
         }
     });
 
@@ -88,7 +94,7 @@ app.get('/api/generate-token', (req, res) => {
 });
 
 // =====================================
-// 4. Відмітка приходу (ВИПРАВЛЕНО - прибрано перевірку часу)
+// 4. Відмітка приходу (ВИПРАВЛЕНО)
 // =====================================
 app.post('/api/check-in', (req, res) => {
     const { token, employee, latitude, longitude } = req.body;
@@ -118,17 +124,10 @@ app.post('/api/check-in', (req, res) => {
             console.log('🔍 Результат пошуку:', row ? '✅ Токен знайдено' : '❌ Токен не знайдено');
             
             if (!row) {
-                // Покажемо всі токени для діагностики
-                db.all('SELECT token, used FROM tokens ORDER BY created_at DESC LIMIT 5', [], (err, allTokens) => {
-                    if (!err && allTokens.length > 0) {
-                        console.log('📋 Останні токени в БД:', allTokens);
-                    }
-                });
-                
                 return res.json({ success: false, message: '❌ Токен не знайдено' });
             }
             
-            console.log('✅ Токен знайдено, created_at:', row.created_at);
+            console.log('✅ Токен знайдено, створено:', row.created_at);
             
             // Позначаємо токен як використаний
             db.run('UPDATE tokens SET used = 1 WHERE token = ?', [token], function(err) {
@@ -298,29 +297,28 @@ app.get('/api/test-db', (req, res) => {
 });
 
 // =====================================
-// 8. Очищення старих токенів
+// 8. Очищення використаних токенів
 // =====================================
 app.get('/api/cleanup', (req, res) => {
-    console.log('🧹 Очищення старих токенів');
+    console.log('🧹 Очищення використаних токенів');
     db.run(`DELETE FROM tokens WHERE used = 1`, function(err) {
         if (err) {
             console.error('❌ Помилка очищення:', err);
             res.json({ success: false, error: err.message });
         } else {
-            console.log(`✅ Видалено ${this.changes} старих токенів`);
+            console.log(`✅ Видалено ${this.changes} використаних токенів`);
             res.json({ success: true, deleted: this.changes });
         }
     });
 });
 
 // =====================================
-// 9. ТЕСТОВИЙ ендпоінт (без перевірки токена)
+// 9. ТЕСТОВИЙ ендпоінт
 // =====================================
 app.post('/api/test-checkin', (req, res) => {
     const { token, employee, latitude, longitude } = req.body;
     console.log('🧪 Тестова відмітка:', { token, employee });
     
-    // Просто зберігаємо відмітку без перевірки токена
     db.run(
         'INSERT INTO attendance (employee, token, latitude, longitude) VALUES (?, ?, ?, ?)',
         [employee, token, latitude || null, longitude || null],
@@ -358,7 +356,7 @@ app.get('/', (req, res) => {
             <div class="container">
                 <h1>✅ Система обліку часу</h1>
                 <p>Сервер успішно запущено на SQLite!</p>
-                <p>⏱️ Перевірку часу вимкнено для тесту</p>
+                <p>⏱️ Базу даних виправлено (додано колонку used)</p>
                 <div class="status">
                     <p>🕐 Час: ${new Date().toLocaleString()}</p>
                 </div>
