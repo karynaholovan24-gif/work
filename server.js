@@ -5,6 +5,14 @@ const path = require('path');
 const fs = require('fs');
 
 const app = express();
+
+// =====================================
+// Налаштування українського часу
+// =====================================
+process.env.TZ = 'Europe/Kiev';
+console.log('🕐 Часовий пояс:', process.env.TZ);
+console.log('🕐 Поточний час:', new Date().toLocaleString('uk-UA'));
+
 const PORT = process.env.PORT || 3000;
 
 // =====================================
@@ -124,6 +132,10 @@ setTimeout(() => {
 // =====================================
 app.get('/api/generate-token', (req, res) => {
     const token = Math.random().toString(36).substring(2, 10);
+    const now = new Date();
+    
+    console.log('✅ Створено токен:', token);
+    console.log('🕐 Час створення (київський):', now.toLocaleString('uk-UA'));
     
     // Додаємо в пам'ять
     activeTokens.add(token);
@@ -137,7 +149,6 @@ app.get('/api/generate-token', (req, res) => {
         }
     });
     
-    console.log('✅ Створено токен:', token);
     console.log('💾 Токени в пам\'яті:', Array.from(activeTokens));
     
     res.json({ token });
@@ -148,11 +159,13 @@ app.get('/api/generate-token', (req, res) => {
 // =====================================
 app.post('/api/check-in', (req, res) => {
     const { token, employee, latitude, longitude } = req.body;
+    const now = new Date();
     
     console.log('\n📝 ===== НОВА ВІДМІТКА =====');
     console.log('🔍 Отриманий token з QR:', token);
     console.log('👤 Працівник:', employee);
     console.log('📍 Координати:', latitude, longitude);
+    console.log('🕐 Час відмітки (київський):', now.toLocaleString('uk-UA'));
     
     if (!token || !employee) {
         console.log('❌ Немає даних');
@@ -224,7 +237,7 @@ app.post('/api/check-in', (req, res) => {
                         res.json({ success: false, message: '❌ Помилка запису' });
                     } else {
                         console.log('✅ Токен створено автоматично і відмітку збережено!');
-                        res.json({ success: true, message: '✅ Прихід зафіксовано (токен створено автоматично)' });
+                        res.json({ success: true, message: '✅ Прихід зафіксовано' });
                     }
                 }
             );
@@ -245,10 +258,22 @@ app.get('/api/tokens', (req, res) => {
 });
 
 // =====================================
-// 8. Перегляд відміток
+// 8. Перегляд відміток (З КИЇВСЬКИМ ЧАСОМ)
 // =====================================
 app.get('/api/attendance', (req, res) => {
     db.all('SELECT * FROM attendance ORDER BY time DESC', [], (err, rows) => {
+        if (rows) {
+            // Конвертуємо час в київський для кожного запису
+            rows = rows.map(row => {
+                const date = new Date(row.time);
+                return {
+                    id: row.id,
+                    employee: row.employee,
+                    token: row.token,
+                    time: date.toLocaleString('uk-UA', { timeZone: 'Europe/Kiev' })
+                };
+            });
+        }
         res.json(rows || []);
     });
 });
@@ -262,7 +287,8 @@ app.get('/api/status', (req, res) => {
             res.json({ 
                 memory_tokens: activeTokens.size,
                 database_tokens: tokenRow?.count || 0,
-                attendance: attRow?.count || 0
+                attendance: attRow?.count || 0,
+                current_time: new Date().toLocaleString('uk-UA')
             });
         });
     });
@@ -336,16 +362,16 @@ app.get('/', (req, res) => {
         <body>
             <div class="container">
                 <h1>✅ Система обліку часу</h1>
-                <p>Сервер працює з <span class="success">автоматичним створенням токенів</span></p>
+                <p>Сервер працює з <span class="success">українським часом</span></p>
                 <div class="info">
+                    <p>🕐 Поточний час: ${new Date().toLocaleString('uk-UA')}</p>
                     <p>🔹 Якщо токен не знайдено - він створюється автоматично</p>
                     <p>🔹 Тестові токени: test123, demo456, admin789, qr2024, work001</p>
-                    <p>🔹 Тепер можна сканувати будь-який QR - токен створиться сам!</p>
                 </div>
                 <ul>
                     <li><a href="/qr.html">📱 QR код для сканування</a></li>
                     <li><a href="/api/tokens">🔑 Перегляд всіх токенів</a></li>
-                    <li><a href="/api/attendance">📊 Всі відмітки</a></li>
+                    <li><a href="/api/attendance">📊 Всі відмітки (київський час)</a></li>
                     <li><a href="/api/status">📈 Статус системи</a></li>
                     <li><a href="/api/reset">🧹 Очистити всі токени</a></li>
                 </ul>
