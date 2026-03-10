@@ -125,7 +125,7 @@ setTimeout(() => {
             });
         });
     });
-}, 1000); // Чекаємо 1 секунду поки створяться таблиці
+}, 1000);
 
 // =====================================
 // 5. Генерація токена
@@ -137,10 +137,8 @@ app.get('/api/generate-token', (req, res) => {
     console.log('✅ Створено токен:', token);
     console.log('🕐 Час створення (київський):', now.toLocaleString('uk-UA'));
     
-    // Додаємо в пам'ять
     activeTokens.add(token);
     
-    // Додаємо в базу даних
     db.run('INSERT INTO tokens (token) VALUES (?)', [token], (err) => {
         if (err) {
             console.error('❌ Помилка збереження токена:', err);
@@ -155,7 +153,7 @@ app.get('/api/generate-token', (req, res) => {
 });
 
 // =====================================
-// 6. Відмітка приходу (З АВТОМАТИЧНИМ СТВОРЕННЯМ)
+// 6. Відмітка приходу
 // =====================================
 app.post('/api/check-in', (req, res) => {
     const { token, employee, latitude, longitude } = req.body;
@@ -172,17 +170,12 @@ app.post('/api/check-in', (req, res) => {
         return res.json({ success: false, message: '❌ Немає даних' });
     }
     
-    // Спочатку перевіряємо в пам'яті
     if (activeTokens.has(token)) {
         console.log('✅ Токен ЗНАЙДЕНО в пам\'яті!');
         
-        // Видаляємо з пам'яті
         activeTokens.delete(token);
-        
-        // Видаляємо з бази даних
         db.run('DELETE FROM tokens WHERE token = ?', [token]);
         
-        // Зберігаємо відмітку
         db.run('INSERT INTO attendance (employee, token) VALUES (?, ?)', 
             [employee, token], 
             function(err) {
@@ -198,15 +191,12 @@ app.post('/api/check-in', (req, res) => {
         return;
     }
     
-    // Перевіряємо в БД
     db.get('SELECT token FROM tokens WHERE token = ?', [token], (err, row) => {
         if (row) {
             console.log('✅ Токен ЗНАЙДЕНО в БД!');
             
-            // Видаляємо з БД
             db.run('DELETE FROM tokens WHERE token = ?', [token]);
             
-            // Зберігаємо відмітку
             db.run('INSERT INTO attendance (employee, token) VALUES (?, ?)', 
                 [employee, token], 
                 function(err) {
@@ -220,15 +210,9 @@ app.post('/api/check-in', (req, res) => {
         } else {
             console.log('⚠️ Токен не знайдено, створюю автоматично...');
             
-            // АВТОМАТИЧНО ДОДАЄМО ТОКЕН
             activeTokens.add(token);
-            db.run('INSERT INTO tokens (token) VALUES (?)', [token], (err) => {
-                if (err) {
-                    console.error('❌ Помилка створення токена:', err);
-                }
-            });
+            db.run('INSERT INTO tokens (token) VALUES (?)', [token]);
             
-            // ВІДРАЗУ ЗБЕРІГАЄМО ВІДМІТКУ
             db.run('INSERT INTO attendance (employee, token) VALUES (?, ?)', 
                 [employee, token], 
                 function(err) {
@@ -258,19 +242,30 @@ app.get('/api/tokens', (req, res) => {
 });
 
 // =====================================
-// 8. Перегляд відміток (З КИЇВСЬКИМ ЧАСОМ)
+// 8. Перегляд відміток (ПРИМУСОВО київський час)
 // =====================================
 app.get('/api/attendance', (req, res) => {
     db.all('SELECT * FROM attendance ORDER BY time DESC', [], (err, rows) => {
         if (rows) {
-            // Конвертуємо час в київський для кожного запису
             rows = rows.map(row => {
-                const date = new Date(row.time);
+                const utcDate = new Date(row.time);
+                const kyivTime = new Date(utcDate.getTime() + (2 * 60 * 60 * 1000));
+                
+                const formattedTime = kyivTime.toLocaleString('uk-UA', {
+                    year: 'numeric',
+                    month: '2-digit',
+                    day: '2-digit',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit',
+                    hour12: false
+                });
+                
                 return {
                     id: row.id,
                     employee: row.employee,
                     token: row.token,
-                    time: date.toLocaleString('uk-UA', { timeZone: 'Europe/Kiev' })
+                    time: formattedTime
                 };
             });
         }
@@ -279,16 +274,27 @@ app.get('/api/attendance', (req, res) => {
 });
 
 // =====================================
-// 9. Статус
+// 9. Статус (з правильним часом)
 // =====================================
 app.get('/api/status', (req, res) => {
     db.get('SELECT COUNT(*) as count FROM tokens', [], (err, tokenRow) => {
         db.get('SELECT COUNT(*) as count FROM attendance', [], (err, attRow) => {
+            const now = new Date();
+            const kyivTime = new Date(now.getTime() + (2 * 60 * 60 * 1000));
+            
             res.json({ 
                 memory_tokens: activeTokens.size,
                 database_tokens: tokenRow?.count || 0,
                 attendance: attRow?.count || 0,
-                current_time: new Date().toLocaleString('uk-UA')
+                current_time: kyivTime.toLocaleString('uk-UA', {
+                    year: 'numeric',
+                    month: '2-digit',
+                    day: '2-digit',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit',
+                    hour12: false
+                })
             });
         });
     });
@@ -341,6 +347,9 @@ app.get('/api/test/:token', (req, res) => {
 // 13. Головна сторінка
 // =====================================
 app.get('/', (req, res) => {
+    const now = new Date();
+    const kyivTime = new Date(now.getTime() + (2 * 60 * 60 * 1000));
+    
     res.send(`
         <!DOCTYPE html>
         <html>
@@ -362,9 +371,17 @@ app.get('/', (req, res) => {
         <body>
             <div class="container">
                 <h1>✅ Система обліку часу</h1>
-                <p>Сервер працює з <span class="success">українським часом</span></p>
+                <p>Сервер працює з <span class="success">примусовим київським часом</span></p>
                 <div class="info">
-                    <p>🕐 Поточний час: ${new Date().toLocaleString('uk-UA')}</p>
+                    <p>🕐 Поточний час: ${kyivTime.toLocaleString('uk-UA', {
+                        year: 'numeric',
+                        month: '2-digit',
+                        day: '2-digit',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        second: '2-digit',
+                        hour12: false
+                    })}</p>
                     <p>🔹 Якщо токен не знайдено - він створюється автоматично</p>
                     <p>🔹 Тестові токени: test123, demo456, admin789, qr2024, work001</p>
                 </div>
