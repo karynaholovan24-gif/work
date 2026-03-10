@@ -144,36 +144,71 @@ app.get('/api/generate-token', (req, res) => {
 });
 
 // =====================================
-// 6. Відмітка приходу
+// 6. Відмітка приходу (З ДЕТАЛЬНИМ ЛОГУВАННЯМ)
 // =====================================
 app.post('/api/check-in', (req, res) => {
     const { token, employee, latitude, longitude } = req.body;
     
     console.log('\n📝 ===== НОВА ВІДМІТКА =====');
     console.log('🔍 Отриманий token з QR:', token);
+    console.log('🔍 Тип token:', typeof token);
+    console.log('🔍 Довжина token:', token?.length);
     console.log('👤 Працівник:', employee);
     console.log('📍 Координати:', latitude, longitude);
     
     if (!token || !employee) {
+        console.log('❌ Немає даних');
         return res.json({ success: false, message: '❌ Немає даних' });
     }
     
-    // Перевіряємо в пам'яті спочатку
-    console.log('🔍 Перевірка в пам\'яті...');
+    // Перевіряємо кожен символ
+    console.log('🔍 Коди символів:');
+    for (let i = 0; i < token.length; i++) {
+        console.log(`   символ[${i}] = '${token[i]}' (код: ${token.charCodeAt(i)})`);
+    }
+    
+    // Показуємо всі токени в пам'яті для порівняння
     console.log('💾 Токени в пам\'яті:', Array.from(activeTokens));
     
-    if (activeTokens.has(token)) {
+    // Перевіряємо чи є токен в пам'яті (з детальним порівнянням)
+    let foundInMemory = false;
+    let matchingToken = null;
+    
+    for (const memToken of activeTokens) {
+        console.log(`🔍 Порівнюю з токеном в пам'яті: "${memToken}" (довжина: ${memToken.length})`);
+        
+        // Порівнюємо кожен символ
+        let match = true;
+        for (let i = 0; i < Math.min(token.length, memToken.length); i++) {
+            if (token[i] !== memToken[i]) {
+                console.log(`   ❌ Різниця на позиції ${i}: '${token[i]}' (${token.charCodeAt(i)}) vs '${memToken[i]}' (${memToken.charCodeAt(i)})`);
+                match = false;
+                break;
+            }
+        }
+        
+        if (match && token.length === memToken.length) {
+            foundInMemory = true;
+            matchingToken = memToken;
+            console.log(`✅ ЗБІГ! Знайдено в пам'яті: "${memToken}"`);
+            break;
+        } else if (match) {
+            console.log(`❌ Різна довжина: token=${token.length}, memToken=${memToken.length}`);
+        }
+    }
+    
+    if (foundInMemory) {
         console.log('✅ Токен ЗНАЙДЕНО в пам\'яті!');
         
         // Видаляємо з пам'яті
-        activeTokens.delete(token);
+        activeTokens.delete(matchingToken);
         
         // Видаляємо з бази даних
-        db.run('DELETE FROM tokens WHERE token = ?', [token]);
+        db.run('DELETE FROM tokens WHERE token = ?', [matchingToken]);
         
         // Зберігаємо відмітку
         db.run('INSERT INTO attendance (employee, token) VALUES (?, ?)', 
-            [employee, token], 
+            [employee, matchingToken], 
             function(err) {
                 if (err) {
                     console.error('❌ Помилка запису:', err);
@@ -187,10 +222,14 @@ app.post('/api/check-in', (req, res) => {
         return;
     }
     
-    // Якщо нема в пам'яті - перевіряємо в БД
     console.log('❌ В пам\'яті не знайдено, перевіряю БД...');
     
+    // Перевіряємо в БД
     db.get('SELECT token FROM tokens WHERE token = ?', [token], (err, row) => {
+        if (err) {
+            console.error('❌ Помилка БД:', err);
+        }
+        
         if (row) {
             console.log('✅ Токен ЗНАЙДЕНО в БД!');
             
@@ -210,7 +249,14 @@ app.post('/api/check-in', (req, res) => {
             );
         } else {
             console.log('❌ Токен НЕ ЗНАЙДЕНО ніде!');
-            res.json({ success: false, message: '❌ Токен не знайдено' });
+            
+            // Показуємо всі токени для діагностики
+            console.log('📋 Всі токени в пам\'яті:', Array.from(activeTokens));
+            
+            db.all('SELECT token FROM tokens', [], (err, dbTokens) => {
+                console.log('📋 Всі токени в БД:', dbTokens.map(t => t.token));
+                res.json({ success: false, message: '❌ Токен не знайдено' });
+            });
         }
     });
 });
@@ -262,7 +308,29 @@ app.get('/api/clear', (req, res) => {
 });
 
 // =====================================
-// 11. Головна сторінка
+// 11. Тестовий ендпоінт для перевірки
+// =====================================
+app.get('/api/test/:token', (req, res) => {
+    const testToken = req.params.token;
+    
+    console.log('🧪 Тестовий пошук токена:', testToken);
+    console.log('💾 Токени в пам\'яті:', Array.from(activeTokens));
+    
+    const found = activeTokens.has(testToken);
+    
+    db.get('SELECT token FROM tokens WHERE token = ?', [testToken], (err, row) => {
+        res.json({
+            token: testToken,
+            in_memory: found,
+            in_database: !!row,
+            memory_tokens: Array.from(activeTokens),
+            database_tokens: row ? [row.token] : []
+        });
+    });
+});
+
+// =====================================
+// 12. Головна сторінка
 // =====================================
 app.get('/', (req, res) => {
     res.send(`
@@ -303,12 +371,13 @@ app.get('/', (req, res) => {
 });
 
 // =====================================
-// 12. Запуск сервера
+// 13. Запуск сервера
 // =====================================
 app.listen(PORT, () => {
     console.log(`\n🚀 Сервер запущено на порту ${PORT}`);
     console.log(`🌍 https://work-ibj8.onrender.com`);
     console.log(`📱 QR сторінка: https://work-ibj8.onrender.com/qr.html`);
     console.log(`🔑 Токени: https://work-ibj8.onrender.com/api/tokens`);
-    console.log(`📊 Відмітки: https://work-ibj8.onrender.com/api/attendance\n`);
+    console.log(`📊 Відмітки: https://work-ibj8.onrender.com/api/attendance`);
+    console.log(`🧪 Тест: https://work-ibj8.onrender.com/api/test/test123\n`);
 });
