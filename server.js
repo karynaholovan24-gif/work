@@ -27,7 +27,7 @@ const db = new sqlite3.Database('./database.sqlite', (err) => {
     }
 });
 
-// Створюємо таблиці
+// Створюємо таблиці (виправлено синтаксис)
 db.serialize(() => {
     // Таблиця токенів
     db.run(`CREATE TABLE IF NOT EXISTS tokens (
@@ -72,7 +72,7 @@ app.get('/api/generate-token', (req, res) => {
 });
 
 // =====================================
-// 4. Відмітка приходу
+// 4. Відмітка приходу (виправлено SQL запит)
 // =====================================
 app.post('/api/check-in', (req, res) => {
     const { token, employee, latitude, longitude } = req.body;
@@ -88,9 +88,12 @@ app.post('/api/check-in', (req, res) => {
         return res.json({ success: false, message: '❌ Немає даних' });
     }
     
-    // Шукаємо токен (дійсний 30 секунд)
+    // Шукаємо токен (виправлено синтаксис)
     db.get(
-        'SELECT * FROM tokens WHERE token = ? AND used = 0 AND datetime(created_at) > datetime("now", "-30 seconds")',
+        `SELECT * FROM tokens 
+         WHERE token = ? 
+         AND used = 0 
+         AND datetime(created_at) > datetime('now', '-30 seconds')`,
         [token],
         (err, row) => {
             if (err) {
@@ -101,10 +104,19 @@ app.post('/api/check-in', (req, res) => {
             console.log('🔍 Токен знайдено?', row ? 'Так' : 'Ні');
             
             if (!row) {
-                return res.json({ 
-                    success: false, 
-                    message: '❌ Токен не дійсний або прострочений' 
+                // Перевіримо чи взагалі є такий токен
+                db.get('SELECT * FROM tokens WHERE token = ?', [token], (err, existingToken) => {
+                    if (existingToken) {
+                        if (existingToken.used === 1) {
+                            return res.json({ success: false, message: '❌ Токен вже використано' });
+                        } else {
+                            return res.json({ success: false, message: '❌ Токен прострочений (більше 30 секунд)' });
+                        }
+                    } else {
+                        return res.json({ success: false, message: '❌ Токен не знайдено' });
+                    }
                 });
+                return;
             }
             
             // Позначаємо токен як використаний
@@ -157,12 +169,12 @@ app.get('/api/attendance', (req, res) => {
 // 6. Статус БД
 // =====================================
 app.get('/api/status', (req, res) => {
-    db.get('SELECT COUNT(*) as tokens FROM tokens', [], (err, tokenRow) => {
+    db.get('SELECT COUNT(*) as count FROM tokens', [], (err, tokenRow) => {
         if (err) {
             return res.json({ connected: false, error: err.message });
         }
         
-        db.get('SELECT COUNT(*) as attendance FROM attendance', [], (err, attRow) => {
+        db.get('SELECT COUNT(*) as count FROM attendance', [], (err, attRow) => {
             if (err) {
                 return res.json({ connected: false, error: err.message });
             }
@@ -172,8 +184,8 @@ app.get('/api/status', (req, res) => {
                 res.json({ 
                     connected: true,
                     database: 'SQLite',
-                    tokens: tokenRow?.tokens || 0, 
-                    attendance: attRow?.attendance || 0,
+                    tokens: tokenRow?.count || 0, 
+                    attendance: attRow?.count || 0,
                     lastToken: lastToken || null,
                     message: '✅ SQLite працює'
                 });
@@ -183,10 +195,10 @@ app.get('/api/status', (req, res) => {
 });
 
 // =====================================
-// 7. Очищення старих токенів (опціонально)
+// 7. Очищення старих токенів
 // =====================================
 app.get('/api/cleanup', (req, res) => {
-    db.run('DELETE FROM tokens WHERE used = 1 OR datetime(created_at) < datetime("now", "-1 hour")', function(err) {
+    db.run(`DELETE FROM tokens WHERE used = 1 OR datetime(created_at) < datetime('now', '-1 hour')`, function(err) {
         if (err) {
             res.json({ success: false, error: err.message });
         } else {
