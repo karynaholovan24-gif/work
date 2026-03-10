@@ -8,6 +8,11 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // =====================================
+// Тимчасове сховище токенів (не зникає!)
+// =====================================
+const activeTokens = new Set();
+
+// =====================================
 // 1. Middleware
 // =====================================
 app.use(cors());
@@ -73,23 +78,73 @@ db.serialize(() => {
 });
 
 // =====================================
-// 4. Генерація токена
+// 4. Додаємо тестові токени при запуску
+// =====================================
+setTimeout(() => {
+    db.serialize(() => {
+        // Перевіряємо чи є токени
+        db.get('SELECT COUNT(*) as count FROM tokens', [], (err, row) => {
+            if (err) {
+                console.error('❌ Помилка перевірки токенів:', err);
+                return;
+            }
+            
+            console.log('📊 Поточна кількість токенів в БД:', row.count);
+            
+            if (row.count === 0) {
+                console.log('🔄 Додаю тестові токени...');
+                const testTokens = ['test123', 'demo456', 'admin789', 'qr2024', 'work001'];
+                
+                testTokens.forEach(token => {
+                    db.run('INSERT INTO tokens (token) VALUES (?)', [token], (err) => {
+                        if (!err) {
+                            console.log('✅ Додано тестовий токен:', token);
+                            activeTokens.add(token);
+                        }
+                    });
+                });
+                
+                console.log('✅ Тестові токени додано в БД та пам\'ять');
+            }
+            
+            // Показуємо всі токени
+            db.all('SELECT token FROM tokens', [], (err, rows) => {
+                if (!err && rows.length > 0) {
+                    console.log('📋 Токени в БД:', rows.map(r => r.token));
+                    rows.forEach(r => activeTokens.add(r.token));
+                    console.log('💾 Токени в пам\'яті:', Array.from(activeTokens));
+                }
+            });
+        });
+    });
+}, 1000); // Чекаємо 1 секунду поки створяться таблиці
+
+// =====================================
+// 5. Генерація токена
 // =====================================
 app.get('/api/generate-token', (req, res) => {
     const token = Math.random().toString(36).substring(2, 10);
-    console.log('✅ Створено токен:', token);
-
+    
+    // Додаємо в пам'ять
+    activeTokens.add(token);
+    
+    // Додаємо в базу даних
     db.run('INSERT INTO tokens (token) VALUES (?)', [token], (err) => {
         if (err) {
             console.error('❌ Помилка збереження токена:', err);
-            return res.status(500).json({ error: 'Помилка сервера' });
+        } else {
+            console.log('✅ Токен збережено в БД:', token);
         }
-        res.json({ token });
     });
+    
+    console.log('✅ Створено токен:', token);
+    console.log('💾 Токени в пам\'яті:', Array.from(activeTokens));
+    
+    res.json({ token });
 });
 
 // =====================================
-// 5. Відмітка приходу (З ДІАГНОСТИКОЮ)
+// 6. Відмітка приходу
 // =====================================
 app.post('/api/check-in', (req, res) => {
     const { token, employee, latitude, longitude } = req.body;
@@ -103,17 +158,43 @@ app.post('/api/check-in', (req, res) => {
         return res.json({ success: false, message: '❌ Немає даних' });
     }
     
-    // Показуємо всі токени в базі
-    db.all('SELECT token FROM tokens', [], (err, rows) => {
-        console.log('📋 Всі токени в БД зараз:', rows.map(r => r.token));
+    // Перевіряємо в пам'яті спочатку
+    console.log('🔍 Перевірка в пам\'яті...');
+    console.log('💾 Токени в пам\'яті:', Array.from(activeTokens));
+    
+    if (activeTokens.has(token)) {
+        console.log('✅ Токен ЗНАЙДЕНО в пам\'яті!');
         
-        // Шукаємо чи є наш токен серед них
-        const found = rows.find(r => r.token === token);
+        // Видаляємо з пам'яті
+        activeTokens.delete(token);
         
-        if (found) {
-            console.log('✅ Токен Є в базі!');
+        // Видаляємо з бази даних
+        db.run('DELETE FROM tokens WHERE token = ?', [token]);
+        
+        // Зберігаємо відмітку
+        db.run('INSERT INTO attendance (employee, token) VALUES (?, ?)', 
+            [employee, token], 
+            function(err) {
+                if (err) {
+                    console.error('❌ Помилка запису:', err);
+                    res.json({ success: false, message: '❌ Помилка запису' });
+                } else {
+                    console.log('✅ Відмітку збережено!');
+                    res.json({ success: true, message: '✅ Прихід зафіксовано' });
+                }
+            }
+        );
+        return;
+    }
+    
+    // Якщо нема в пам'яті - перевіряємо в БД
+    console.log('❌ В пам\'яті не знайдено, перевіряю БД...');
+    
+    db.get('SELECT token FROM tokens WHERE token = ?', [token], (err, row) => {
+        if (row) {
+            console.log('✅ Токен ЗНАЙДЕНО в БД!');
             
-            // Видаляємо використаний токен
+            // Видаляємо з БД
             db.run('DELETE FROM tokens WHERE token = ?', [token]);
             
             // Зберігаємо відмітку
@@ -121,36 +202,33 @@ app.post('/api/check-in', (req, res) => {
                 [employee, token], 
                 function(err) {
                     if (err) {
-                        console.error('❌ Помилка запису:', err);
                         res.json({ success: false, message: '❌ Помилка запису' });
                     } else {
-                        console.log('✅ Відмітку збережено!');
                         res.json({ success: true, message: '✅ Прихід зафіксовано' });
                     }
                 }
             );
         } else {
-            console.log('❌ Токен НЕМАЄ в базі');
-            console.log('🔍 Отриманий token:', token);
-            console.log('🔍 Довжина token:', token.length);
-            console.log('🔍 Token в лапках: "' + token + '"');
-            
+            console.log('❌ Токен НЕ ЗНАЙДЕНО ніде!');
             res.json({ success: false, message: '❌ Токен не знайдено' });
         }
     });
 });
 
 // =====================================
-// 6. Перегляд всіх токенів
+// 7. Перегляд всіх токенів (з пам'яті та БД)
 // =====================================
 app.get('/api/tokens', (req, res) => {
-    db.all('SELECT * FROM tokens ORDER BY created_at DESC', [], (err, rows) => {
-        res.json(rows || []);
+    db.all('SELECT * FROM tokens ORDER BY created_at DESC', [], (err, dbTokens) => {
+        res.json({
+            memory_tokens: Array.from(activeTokens),
+            database_tokens: dbTokens || []
+        });
     });
 });
 
 // =====================================
-// 7. Перегляд відміток
+// 8. Перегляд відміток
 // =====================================
 app.get('/api/attendance', (req, res) => {
     db.all('SELECT * FROM attendance ORDER BY time DESC', [], (err, rows) => {
@@ -159,13 +237,14 @@ app.get('/api/attendance', (req, res) => {
 });
 
 // =====================================
-// 8. Статус БД
+// 9. Статус
 // =====================================
 app.get('/api/status', (req, res) => {
     db.get('SELECT COUNT(*) as count FROM tokens', [], (err, tokenRow) => {
         db.get('SELECT COUNT(*) as count FROM attendance', [], (err, attRow) => {
             res.json({ 
-                tokens: tokenRow?.count || 0, 
+                memory_tokens: activeTokens.size,
+                database_tokens: tokenRow?.count || 0,
                 attendance: attRow?.count || 0
             });
         });
@@ -173,24 +252,63 @@ app.get('/api/status', (req, res) => {
 });
 
 // =====================================
-// 9. Головна сторінка
+// 10. Очистити всі токени
+// =====================================
+app.get('/api/clear', (req, res) => {
+    activeTokens.clear();
+    db.run('DELETE FROM tokens', [], (err) => {
+        res.json({ success: true, message: '✅ Всі токени видалено' });
+    });
+});
+
+// =====================================
+// 11. Головна сторінка
 // =====================================
 app.get('/', (req, res) => {
     res.send(`
-        <h1>Система обліку часу</h1>
-        <ul>
-            <li><a href="/qr.html">📱 QR код</a></li>
-            <li><a href="/api/tokens">🔑 Токени</a></li>
-            <li><a href="/api/attendance">📊 Відмітки</a></li>
-            <li><a href="/api/status">📈 Статус</a></li>
-        </ul>
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Система обліку часу</title>
+            <style>
+                body { font-family: Arial; padding: 40px; background: linear-gradient(135deg, #667eea, #764ba2); color: white; }
+                .container { max-width: 800px; margin: 0 auto; background: rgba(255,255,255,0.1); padding: 30px; border-radius: 15px; }
+                h1 { margin-bottom: 20px; }
+                ul { list-style: none; padding: 0; }
+                li { margin: 15px 0; }
+                a { color: white; text-decoration: none; padding: 10px 20px; background: rgba(255,255,255,0.2); border-radius: 8px; display: inline-block; }
+                a:hover { background: rgba(255,255,255,0.3); }
+                .info { margin-top: 20px; padding: 15px; background: rgba(0,0,0,0.3); border-radius: 8px; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>✅ Система обліку часу</h1>
+                <p>Сервер працює з подвійним зберіганням токенів</p>
+                <div class="info">
+                    <p>🔹 Токени зберігаються в пам'яті (не зникають при перезапуску)</p>
+                    <p>🔹 Тестові токени: test123, demo456, admin789, qr2024, work001</p>
+                </div>
+                <ul>
+                    <li><a href="/qr.html">📱 QR код для сканування</a></li>
+                    <li><a href="/api/tokens">🔑 Перегляд всіх токенів</a></li>
+                    <li><a href="/api/attendance">📊 Всі відмітки</a></li>
+                    <li><a href="/api/status">📈 Статус системи</a></li>
+                    <li><a href="/api/clear">🧹 Очистити всі токени</a></li>
+                </ul>
+            </div>
+        </body>
+        </html>
     `);
 });
 
 // =====================================
-// 10. Запуск сервера
+// 12. Запуск сервера
 // =====================================
 app.listen(PORT, () => {
     console.log(`\n🚀 Сервер запущено на порту ${PORT}`);
     console.log(`🌍 https://work-ibj8.onrender.com`);
+    console.log(`📱 QR сторінка: https://work-ibj8.onrender.com/qr.html`);
+    console.log(`🔑 Токени: https://work-ibj8.onrender.com/api/tokens`);
+    console.log(`📊 Відмітки: https://work-ibj8.onrender.com/api/attendance\n`);
 });
