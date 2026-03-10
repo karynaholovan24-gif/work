@@ -3,25 +3,58 @@ const sqlite3 = require('sqlite3').verbose();
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
-const dayjs = require('dayjs');
-const utc = require('dayjs/plugin/utc');
-const timezone = require('dayjs/plugin/timezone');
-
-// Налаштовуємо dayjs
-dayjs.extend(utc);
-dayjs.extend(timezone);
-dayjs.tz.setDefault('Europe/Kiev');
 
 const app = express();
-
-// =====================================
-// Налаштування українського часу
-// =====================================
-process.env.TZ = 'Europe/Kiev';
-console.log('🕐 Часовий пояс:', process.env.TZ);
-console.log('🕐 Поточний час:', dayjs().tz('Europe/Kiev').format('DD.MM.YYYY HH:mm:ss'));
-
 const PORT = process.env.PORT || 3000;
+
+// =====================================
+// Функція для конвертації в київський час (+2 години)
+// =====================================
+function toKyivTime(utcTime) {
+    const date = new Date(utcTime);
+    
+    // Отримуємо компоненти UTC
+    let year = date.getUTCFullYear();
+    let month = date.getUTCMonth() + 1;
+    let day = date.getUTCDate();
+    let hours = date.getUTCHours();
+    let minutes = date.getUTCMinutes();
+    let seconds = date.getUTCSeconds();
+    
+    // Додаємо 2 години (київський час взимку)
+    hours += 2;
+    
+    // Якщо перейшли на наступний день
+    if (hours >= 24) {
+        hours -= 24;
+        day += 1;
+        
+        // Перевіряємо чи не перейшли на наступний місяць
+        if (month === 2) { // лютий
+            const isLeap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+            const daysInMonth = isLeap ? 29 : 28;
+            if (day > daysInMonth) {
+                day = 1;
+                month += 1;
+            }
+        } else if ([4, 6, 9, 11].includes(month)) { // місяці з 30 днями
+            if (day > 30) {
+                day = 1;
+                month += 1;
+            }
+        } else if (day > 31) { // місяці з 31 днем
+            day = 1;
+            month += 1;
+            if (month > 12) {
+                month = 1;
+                year += 1;
+            }
+        }
+    }
+    
+    // Форматуємо
+    return `${day.toString().padStart(2, '0')}.${month.toString().padStart(2, '0')}.${year} ${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+}
 
 // =====================================
 // Тимчасове сховище токенів
@@ -40,98 +73,45 @@ app.use(express.static(path.join(__dirname, '..')));
 // 2. Підключення до SQLite
 // =====================================
 console.log('🔄 Створюємо базу даних SQLite...');
-console.log('📁 Поточна папка:', __dirname);
 
-// Перевіряємо права на запис
-try {
-    fs.accessSync(__dirname, fs.constants.W_OK);
-    console.log('✅ Права на запис є');
-} catch (err) {
-    console.error('❌ Немає прав на запис:', err);
-}
-
-const db = new sqlite3.Database('./database.sqlite', (err) => {
-    if (err) {
-        console.error('❌ Помилка відкриття БД:', err);
-    } else {
-        console.log('✅ База даних SQLite відкрита/створена');
-    }
-});
+const db = new sqlite3.Database('./database.sqlite');
 
 // =====================================
 // 3. Створюємо таблиці
 // =====================================
 db.serialize(() => {
-    // Видаляємо старі таблиці
     db.run(`DROP TABLE IF EXISTS tokens`);
     db.run(`DROP TABLE IF EXISTS attendance`);
 
-    // Створюємо таблицю tokens
     db.run(`CREATE TABLE tokens (
         token TEXT PRIMARY KEY,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`, function(err) {
-        if (err) {
-            console.error('❌ Помилка створення tokens:', err);
-        } else {
-            console.log('✅ Таблиця tokens створена');
-        }
-    });
+    )`);
 
-    // Створюємо таблицю attendance
     db.run(`CREATE TABLE attendance (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         employee TEXT,
         token TEXT,
         time DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`, function(err) {
-        if (err) {
-            console.error('❌ Помилка створення attendance:', err);
-        } else {
-            console.log('✅ Таблиця attendance створена');
-        }
-    });
+    )`);
 });
 
 // =====================================
-// 4. Додаємо тестові токени при запуску
+// 4. Додаємо тестові токени
 // =====================================
 setTimeout(() => {
-    db.serialize(() => {
-        // Перевіряємо чи є токени
-        db.get('SELECT COUNT(*) as count FROM tokens', [], (err, row) => {
-            if (err) {
-                console.error('❌ Помилка перевірки токенів:', err);
-                return;
-            }
+    db.get('SELECT COUNT(*) as count FROM tokens', [], (err, row) => {
+        if (row && row.count === 0) {
+            console.log('🔄 Додаю тестові токени...');
+            const testTokens = ['test123', 'demo456', 'admin789', 'qr2024', 'work001'];
             
-            console.log('📊 Поточна кількість токенів в БД:', row.count);
-            
-            if (row.count === 0) {
-                console.log('🔄 Додаю тестові токени...');
-                const testTokens = ['test123', 'demo456', 'admin789', 'qr2024', 'work001'];
-                
-                testTokens.forEach(token => {
-                    db.run('INSERT INTO tokens (token) VALUES (?)', [token], (err) => {
-                        if (!err) {
-                            console.log('✅ Додано тестовий токен:', token);
-                            activeTokens.add(token);
-                        }
-                    });
-                });
-                
-                console.log('✅ Тестові токени додано в БД та пам\'ять');
-            }
-            
-            // Показуємо всі токени
-            db.all('SELECT token FROM tokens', [], (err, rows) => {
-                if (!err && rows.length > 0) {
-                    console.log('📋 Токени в БД:', rows.map(r => r.token));
-                    rows.forEach(r => activeTokens.add(r.token));
-                    console.log('💾 Токени в пам\'яті:', Array.from(activeTokens));
-                }
+            testTokens.forEach(token => {
+                db.run('INSERT INTO tokens (token) VALUES (?)', [token]);
+                activeTokens.add(token);
             });
-        });
+            
+            console.log('✅ Тестові токени додано');
+        }
     });
 }, 1000);
 
@@ -140,21 +120,10 @@ setTimeout(() => {
 // =====================================
 app.get('/api/generate-token', (req, res) => {
     const token = Math.random().toString(36).substring(2, 10);
-    
     console.log('✅ Створено токен:', token);
-    console.log('🕐 Час створення (київський):', dayjs().tz('Europe/Kiev').format('DD.MM.YYYY HH:mm:ss'));
     
     activeTokens.add(token);
-    
-    db.run('INSERT INTO tokens (token) VALUES (?)', [token], (err) => {
-        if (err) {
-            console.error('❌ Помилка збереження токена:', err);
-        } else {
-            console.log('✅ Токен збережено в БД:', token);
-        }
-    });
-    
-    console.log('💾 Токени в пам\'яті:', Array.from(activeTokens));
+    db.run('INSERT INTO tokens (token) VALUES (?)', [token]);
     
     res.json({ token });
 });
@@ -163,83 +132,34 @@ app.get('/api/generate-token', (req, res) => {
 // 6. Відмітка приходу
 // =====================================
 app.post('/api/check-in', (req, res) => {
-    const { token, employee, latitude, longitude } = req.body;
+    const { token, employee } = req.body;
     
-    console.log('\n📝 ===== НОВА ВІДМІТКА =====');
-    console.log('🔍 Отриманий token з QR:', token);
+    console.log('\n📝 Отримано token:', token);
     console.log('👤 Працівник:', employee);
-    console.log('📍 Координати:', latitude, longitude);
-    console.log('🕐 Час відмітки (київський):', dayjs().tz('Europe/Kiev').format('DD.MM.YYYY HH:mm:ss'));
     
     if (!token || !employee) {
-        console.log('❌ Немає даних');
         return res.json({ success: false, message: '❌ Немає даних' });
     }
     
     if (activeTokens.has(token)) {
-        console.log('✅ Токен ЗНАЙДЕНО в пам\'яті!');
+        console.log('✅ Токен знайдено!');
         
         activeTokens.delete(token);
         db.run('DELETE FROM tokens WHERE token = ?', [token]);
+        db.run('INSERT INTO attendance (employee, token) VALUES (?, ?)', [employee, token]);
         
-        db.run('INSERT INTO attendance (employee, token) VALUES (?, ?)', 
-            [employee, token], 
-            function(err) {
-                if (err) {
-                    console.error('❌ Помилка запису:', err);
-                    res.json({ success: false, message: '❌ Помилка запису' });
-                } else {
-                    console.log('✅ Відмітку збережено!');
-                    res.json({ success: true, message: '✅ Прихід зафіксовано' });
-                }
-            }
-        );
-        return;
+        res.json({ success: true, message: '✅ Прихід зафіксовано' });
+    } else {
+        console.log('❌ Токен не знайдено');
+        res.json({ success: false, message: '❌ Токен не знайдено' });
     }
-    
-    db.get('SELECT token FROM tokens WHERE token = ?', [token], (err, row) => {
-        if (row) {
-            console.log('✅ Токен ЗНАЙДЕНО в БД!');
-            
-            db.run('DELETE FROM tokens WHERE token = ?', [token]);
-            
-            db.run('INSERT INTO attendance (employee, token) VALUES (?, ?)', 
-                [employee, token], 
-                function(err) {
-                    if (err) {
-                        res.json({ success: false, message: '❌ Помилка запису' });
-                    } else {
-                        res.json({ success: true, message: '✅ Прихід зафіксовано' });
-                    }
-                }
-            );
-        } else {
-            console.log('⚠️ Токен не знайдено, створюю автоматично...');
-            
-            activeTokens.add(token);
-            db.run('INSERT INTO tokens (token) VALUES (?)', [token]);
-            
-            db.run('INSERT INTO attendance (employee, token) VALUES (?, ?)', 
-                [employee, token], 
-                function(err) {
-                    if (err) {
-                        console.error('❌ Помилка запису:', err);
-                        res.json({ success: false, message: '❌ Помилка запису' });
-                    } else {
-                        console.log('✅ Токен створено автоматично і відмітку збережено!');
-                        res.json({ success: true, message: '✅ Прихід зафіксовано' });
-                    }
-                }
-            );
-        }
-    });
 });
 
 // =====================================
-// 7. Перегляд всіх токенів
+// 7. Перегляд токенів
 // =====================================
 app.get('/api/tokens', (req, res) => {
-    db.all('SELECT * FROM tokens ORDER BY created_at DESC', [], (err, dbTokens) => {
+    db.all('SELECT * FROM tokens', [], (err, dbTokens) => {
         res.json({
             memory_tokens: Array.from(activeTokens),
             database_tokens: dbTokens || []
@@ -248,36 +168,18 @@ app.get('/api/tokens', (req, res) => {
 });
 
 // =====================================
-// 8. Перегляд відміток (просто і надійно з dayjs)
+// 8. Перегляд відміток (З КИЇВСЬКИМ ЧАСОМ)
 // =====================================
 app.get('/api/attendance', (req, res) => {
     db.all('SELECT * FROM attendance ORDER BY time DESC', [], (err, rows) => {
-        if (err) {
-            console.error('❌ Помилка отримання відміток:', err);
-            return res.json([]);
-        }
-        
         if (rows) {
             rows = rows.map(row => {
-                try {
-                    // Конвертуємо UTC в київський час
-                    const kyivTime = dayjs.utc(row.time).tz('Europe/Kiev').format('DD.MM.YYYY HH:mm:ss');
-                    
-                    return {
-                        id: row.id,
-                        employee: row.employee,
-                        token: row.token,
-                        time: kyivTime
-                    };
-                } catch (e) {
-                    console.error('❌ Помилка конвертації часу:', e);
-                    return {
-                        id: row.id,
-                        employee: row.employee,
-                        token: row.token,
-                        time: row.time
-                    };
-                }
+                return {
+                    id: row.id,
+                    employee: row.employee,
+                    token: row.token,
+                    time: toKyivTime(row.time)  // Конвертуємо час
+                };
             });
         }
         res.json(rows || []);
@@ -285,68 +187,21 @@ app.get('/api/attendance', (req, res) => {
 });
 
 // =====================================
-// 9. Статус (з автоматичним часом)
+// 9. Статус
 // =====================================
 app.get('/api/status', (req, res) => {
-    db.get('SELECT COUNT(*) as count FROM tokens', [], (err, tokenRow) => {
-        db.get('SELECT COUNT(*) as count FROM attendance', [], (err, attRow) => {
-            res.json({ 
-                memory_tokens: activeTokens.size,
-                database_tokens: tokenRow?.count || 0,
-                attendance: attRow?.count || 0,
-                current_time: dayjs().tz('Europe/Kiev').format('DD.MM.YYYY HH:mm:ss')
-            });
-        });
+    const now = new Date();
+    res.json({
+        memory_tokens: activeTokens.size,
+        current_time: toKyivTime(now.toISOString())
     });
 });
 
 // =====================================
-// 10. Очистити всі токени
-// =====================================
-app.get('/api/clear', (req, res) => {
-    activeTokens.clear();
-    db.run('DELETE FROM tokens', [], (err) => {
-        res.json({ success: true, message: '✅ Всі токени видалено' });
-    });
-});
-
-// =====================================
-// 11. Видалити тестові токени
-// =====================================
-app.get('/api/reset', (req, res) => {
-    activeTokens.clear();
-    db.run('DELETE FROM tokens', [], (err) => {
-        console.log('✅ Всі токени видалено');
-        res.json({ success: true, message: '✅ Базу очищено. Створіть новий токен!' });
-    });
-});
-
-// =====================================
-// 12. Тестовий ендпоінт
-// =====================================
-app.get('/api/test/:token', (req, res) => {
-    const testToken = req.params.token;
-    
-    console.log('🧪 Тестовий пошук токена:', testToken);
-    console.log('💾 Токени в пам\'яті:', Array.from(activeTokens));
-    
-    const found = activeTokens.has(testToken);
-    
-    db.get('SELECT token FROM tokens WHERE token = ?', [testToken], (err, row) => {
-        res.json({
-            token: testToken,
-            in_memory: found,
-            in_database: !!row,
-            memory_tokens: Array.from(activeTokens),
-            database_tokens: row ? [row.token] : []
-        });
-    });
-});
-
-// =====================================
-// 13. Головна сторінка
+// 10. Головна сторінка
 // =====================================
 app.get('/', (req, res) => {
+    const now = new Date();
     res.send(`
         <!DOCTYPE html>
         <html>
@@ -361,18 +216,16 @@ app.get('/', (req, res) => {
                 a { color: white; text-decoration: none; padding: 10px 20px; background: rgba(255,255,255,0.2); border-radius: 8px; display: inline-block; }
                 a:hover { background: rgba(255,255,255,0.3); }
                 .info { margin-top: 20px; padding: 15px; background: rgba(0,0,0,0.3); border-radius: 8px; }
-                .success { color: #aaffaa; }
-                .warning { color: #ffaa00; }
+                .note { color: #ffaa00; font-weight: bold; }
             </style>
         </head>
         <body>
             <div class="container">
                 <h1>✅ Система обліку часу</h1>
-                <p>Сервер працює з <span class="success">бібліотекою dayjs</span></p>
+                <p>Сервер працює з <span class="note">київським часом (+2 години)</span></p>
                 <div class="info">
-                    <p>🕐 Поточний час: ${dayjs().tz('Europe/Kiev').format('DD.MM.YYYY HH:mm:ss')}</p>
-                    <p>🔹 Час автоматично перемикається між літнім та зимовим</p>
-                    <p>🔹 Якщо токен не знайдено - він створюється автоматично</p>
+                    <p>🕐 Поточний час: ${toKyivTime(now.toISOString())}</p>
+                    <p class="note">⚠️ 30 березня 2026 потрібно змінити +2 на +3 (перехід на літній час)</p>
                     <p>🔹 Тестові токени: test123, demo456, admin789, qr2024, work001</p>
                 </div>
                 <ul>
@@ -380,7 +233,6 @@ app.get('/', (req, res) => {
                     <li><a href="/api/tokens">🔑 Перегляд всіх токенів</a></li>
                     <li><a href="/api/attendance">📊 Всі відмітки (київський час)</a></li>
                     <li><a href="/api/status">📈 Статус системи</a></li>
-                    <li><a href="/api/reset">🧹 Очистити всі токени</a></li>
                 </ul>
             </div>
         </body>
@@ -389,7 +241,7 @@ app.get('/', (req, res) => {
 });
 
 // =====================================
-// 14. Запуск сервера
+// 11. Запуск сервера
 // =====================================
 app.listen(PORT, () => {
     console.log(`\n🚀 Сервер запущено на порту ${PORT}`);
@@ -397,5 +249,5 @@ app.listen(PORT, () => {
     console.log(`📱 QR сторінка: https://work-ibj8.onrender.com/qr.html`);
     console.log(`🔑 Токени: https://work-ibj8.onrender.com/api/tokens`);
     console.log(`📊 Відмітки: https://work-ibj8.onrender.com/api/attendance`);
-    console.log(`🧪 Тест: https://work-ibj8.onrender.com/api/test/test123\n`);
+    console.log(`🕐 Поточний час: ${toKyivTime(new Date().toISOString())}\n`);
 });
