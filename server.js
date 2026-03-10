@@ -11,7 +11,7 @@ const app = express();
 // =====================================
 process.env.TZ = 'Europe/Kiev';
 console.log('🕐 Часовий пояс:', process.env.TZ);
-console.log('🕐 Поточний час:', new Date().toLocaleString('uk-UA'));
+console.log('🕐 Поточний час:', new Date().toLocaleString('uk-UA', { timeZone: 'Europe/Kiev' }));
 
 const PORT = process.env.PORT || 3000;
 
@@ -135,7 +135,7 @@ app.get('/api/generate-token', (req, res) => {
     const now = new Date();
     
     console.log('✅ Створено токен:', token);
-    console.log('🕐 Час створення (київський):', now.toLocaleString('uk-UA'));
+    console.log('🕐 Час створення (київський):', now.toLocaleString('uk-UA', { timeZone: 'Europe/Kiev' }));
     
     activeTokens.add(token);
     
@@ -163,7 +163,7 @@ app.post('/api/check-in', (req, res) => {
     console.log('🔍 Отриманий token з QR:', token);
     console.log('👤 Працівник:', employee);
     console.log('📍 Координати:', latitude, longitude);
-    console.log('🕐 Час відмітки (київський):', now.toLocaleString('uk-UA'));
+    console.log('🕐 Час відмітки (київський):', now.toLocaleString('uk-UA', { timeZone: 'Europe/Kiev' }));
     
     if (!token || !employee) {
         console.log('❌ Немає даних');
@@ -242,30 +242,31 @@ app.get('/api/tokens', (req, res) => {
 });
 
 // =====================================
-// 8. Перегляд відміток (ПРИМУСОВО київський час)
+// 8. Перегляд відміток (АВТОМАТИЧНИЙ київський час)
 // =====================================
 app.get('/api/attendance', (req, res) => {
     db.all('SELECT * FROM attendance ORDER BY time DESC', [], (err, rows) => {
         if (rows) {
             rows = rows.map(row => {
                 const utcDate = new Date(row.time);
-                const kyivTime = new Date(utcDate.getTime() + (2 * 60 * 60 * 1000));
                 
-                const formattedTime = kyivTime.toLocaleString('uk-UA', {
+                // Автоматичне перетворення в київський час (враховує літо/зиму)
+                const kyivTime = utcDate.toLocaleString('uk-UA', { 
+                    timeZone: 'Europe/Kiev',
                     year: 'numeric',
                     month: '2-digit',
                     day: '2-digit',
                     hour: '2-digit',
                     minute: '2-digit',
                     second: '2-digit',
-                    hour12: false
+                    hour12: false 
                 });
                 
                 return {
                     id: row.id,
                     employee: row.employee,
                     token: row.token,
-                    time: formattedTime
+                    time: kyivTime
                 };
             });
         }
@@ -274,26 +275,26 @@ app.get('/api/attendance', (req, res) => {
 });
 
 // =====================================
-// 9. Статус (з правильним часом)
+// 9. Статус (з автоматичним часом)
 // =====================================
 app.get('/api/status', (req, res) => {
     db.get('SELECT COUNT(*) as count FROM tokens', [], (err, tokenRow) => {
         db.get('SELECT COUNT(*) as count FROM attendance', [], (err, attRow) => {
             const now = new Date();
-            const kyivTime = new Date(now.getTime() + (2 * 60 * 60 * 1000));
             
             res.json({ 
                 memory_tokens: activeTokens.size,
                 database_tokens: tokenRow?.count || 0,
                 attendance: attRow?.count || 0,
-                current_time: kyivTime.toLocaleString('uk-UA', {
+                current_time: now.toLocaleString('uk-UA', { 
+                    timeZone: 'Europe/Kiev',
                     year: 'numeric',
                     month: '2-digit',
                     day: '2-digit',
                     hour: '2-digit',
                     minute: '2-digit',
                     second: '2-digit',
-                    hour12: false
+                    hour12: false 
                 })
             });
         });
@@ -348,7 +349,6 @@ app.get('/api/test/:token', (req, res) => {
 // =====================================
 app.get('/', (req, res) => {
     const now = new Date();
-    const kyivTime = new Date(now.getTime() + (2 * 60 * 60 * 1000));
     
     res.send(`
         <!DOCTYPE html>
@@ -371,17 +371,19 @@ app.get('/', (req, res) => {
         <body>
             <div class="container">
                 <h1>✅ Система обліку часу</h1>
-                <p>Сервер працює з <span class="success">примусовим київським часом</span></p>
+                <p>Сервер працює з <span class="success">автоматичним київським часом</span></p>
                 <div class="info">
-                    <p>🕐 Поточний час: ${kyivTime.toLocaleString('uk-UA', {
+                    <p>🕐 Поточний час: ${now.toLocaleString('uk-UA', { 
+                        timeZone: 'Europe/Kiev',
                         year: 'numeric',
                         month: '2-digit',
                         day: '2-digit',
                         hour: '2-digit',
                         minute: '2-digit',
                         second: '2-digit',
-                        hour12: false
+                        hour12: false 
                     })}</p>
+                    <p>🔹 Час автоматично перемикається між літнім та зимовим</p>
                     <p>🔹 Якщо токен не знайдено - він створюється автоматично</p>
                     <p>🔹 Тестові токени: test123, demo456, admin789, qr2024, work001</p>
                 </div>
