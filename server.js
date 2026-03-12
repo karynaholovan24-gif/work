@@ -8,41 +8,27 @@ const utc = require('dayjs/plugin/utc');
 const timezone = require('dayjs/plugin/timezone');
 const XLSX = require('xlsx');
 
-// Налаштовуємо dayjs
 dayjs.extend(utc);
 dayjs.extend(timezone);
 
 const app = express();
 
-// =====================================
-// Налаштування українського часу
-// =====================================
 process.env.TZ = 'Europe/Kiev';
 console.log('🕐 Часовий пояс:', process.env.TZ);
 console.log('🕐 Поточний час:', dayjs().tz('Europe/Kiev').format('DD.MM.YYYY HH:mm:ss'));
 
 const PORT = process.env.PORT || 3000;
 
-// =====================================
-// Тимчасове сховище токенів
-// =====================================
 const activeTokens = new Set();
 
-// =====================================
-// 1. Middleware
-// =====================================
 app.use(cors());
 app.use(express.json());
 app.use(express.static(__dirname));
 app.use(express.static(path.join(__dirname, '..')));
 
-// =====================================
-// 2. Підключення до SQLite
-// =====================================
 console.log('🔄 Створюємо базу даних SQLite...');
 console.log('📁 Поточна папка:', __dirname);
 
-// Перевіряємо права на запис
 try {
     fs.accessSync(__dirname, fs.constants.W_OK);
     console.log('✅ Права на запис є');
@@ -58,15 +44,10 @@ const db = new sqlite3.Database('./database.sqlite', (err) => {
     }
 });
 
-// =====================================
-// 3. Створюємо таблиці
-// =====================================
 db.serialize(() => {
-    // Видаляємо старі таблиці
     db.run(`DROP TABLE IF EXISTS tokens`);
     db.run(`DROP TABLE IF EXISTS attendance`);
 
-    // Створюємо таблицю tokens
     db.run(`CREATE TABLE tokens (
         token TEXT PRIMARY KEY,
         created_at TEXT
@@ -78,7 +59,6 @@ db.serialize(() => {
         }
     });
 
-    // Створюємо таблицю attendance
     db.run(`CREATE TABLE attendance (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         employee TEXT,
@@ -93,12 +73,8 @@ db.serialize(() => {
     });
 });
 
-// =====================================
-// 4. Додаємо тестові токени при запуску
-// =====================================
 setTimeout(() => {
     db.serialize(() => {
-        // Перевіряємо чи є токени
         db.get('SELECT COUNT(*) as count FROM tokens', [], (err, row) => {
             if (err) {
                 console.error('❌ Помилка перевірки токенів:', err);
@@ -124,7 +100,6 @@ setTimeout(() => {
                 console.log('✅ Тестові токени додано в БД та пам\'ять');
             }
             
-            // Показуємо всі токени
             db.all('SELECT token FROM tokens', [], (err, rows) => {
                 if (!err && rows.length > 0) {
                     console.log('📋 Токени в БД:', rows.map(r => r.token));
@@ -136,9 +111,6 @@ setTimeout(() => {
     });
 }, 1000);
 
-// =====================================
-// 5. Генерація токена
-// =====================================
 app.get('/api/generate-token', (req, res) => {
     const token = Math.random().toString(36).substring(2, 10);
     const kyivTime = dayjs().tz('Europe/Kiev').format('YYYY-MM-DD HH:mm:ss');
@@ -161,9 +133,6 @@ app.get('/api/generate-token', (req, res) => {
     res.json({ token });
 });
 
-// =====================================
-// 6. Відмітка приходу (З ГЕОЛОКАЦІЄЮ)
-// =====================================
 app.post('/api/check-in', (req, res) => {
     const { token, employee, latitude, longitude } = req.body;
     const kyivTime = dayjs().tz('Europe/Kiev').format('YYYY-MM-DD HH:mm:ss');
@@ -179,15 +148,12 @@ app.post('/api/check-in', (req, res) => {
         return res.json({ success: false, message: '❌ Немає даних' });
     }
     
-    // ========== ПЕРЕВІРКА ГЕОЛОКАЦІЇ ==========
-    // Координати офісу (ЗАМІНИ НА СВОЇ!)
-    const OFFICE_LAT = 48.92968597521573;  // Широта
-    const OFFICE_LON = 24.707211205709715; // Довгота
-    const MAX_DISTANCE = 0.05; // 50 метрів (0.05 км)
+    const OFFICE_LAT = 48.92968597521573;
+    const OFFICE_LON = 24.707211205709715; 
+    const MAX_DISTANCE = 0.05; 
     
-    // Функція розрахунку відстані між двома точками
     function getDistanceFromOffice(lat, lon) {
-        const R = 6371; // Радіус Землі в кілометрах
+        const R = 6371;
         const dLat = (lat - OFFICE_LAT) * Math.PI / 180;
         const dLon = (lon - OFFICE_LON) * Math.PI / 180;
         const a = 
@@ -195,10 +161,9 @@ app.post('/api/check-in', (req, res) => {
             Math.cos(OFFICE_LAT * Math.PI / 180) * Math.cos(lat * Math.PI / 180) * 
             Math.sin(dLon/2) * Math.sin(dLon/2);
         const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-        return R * c; // відстань в кілометрах
+        return R * c; 
     }
     
-    // Перевіряємо, чи передані координати
     if (!latitude || !longitude) {
         console.log('❌ Немає координат');
         return res.json({ 
@@ -207,11 +172,9 @@ app.post('/api/check-in', (req, res) => {
         });
     }
     
-    // Розраховуємо відстань
     const distance = getDistanceFromOffice(parseFloat(latitude), parseFloat(longitude));
     console.log('📏 Відстань до офісу:', (distance * 1000).toFixed(0), 'метрів');
     
-    // Перевіряємо, чи в межах дозволеної зони
     if (distance > MAX_DISTANCE) {
         console.log('❌ За межами офісу');
         return res.json({ 
@@ -220,9 +183,7 @@ app.post('/api/check-in', (req, res) => {
         });
     }
     console.log('✅ Геолокація в межах офісу');
-    // ========== КІНЕЦЬ ПЕРЕВІРКИ ==========
     
-    // Далі йде перевірка токена
     if (activeTokens.has(token)) {
         console.log('✅ Токен ЗНАЙДЕНО в пам\'яті!');
         
@@ -282,12 +243,8 @@ app.post('/api/check-in', (req, res) => {
     });
 });
 
-// =====================================
-// 7. Перегляд всіх токенів
-// =====================================
 app.get('/api/tokens', (req, res) => {
     db.all('SELECT * FROM tokens ORDER BY created_at DESC', [], (err, dbTokens) => {
-        // Конвертуємо час для відображення
         if (dbTokens) {
             dbTokens = dbTokens.map(token => {
                 return {
@@ -303,9 +260,6 @@ app.get('/api/tokens', (req, res) => {
     });
 });
 
-// =====================================
-// 8. Перегляд відміток
-// =====================================
 app.get('/api/attendance', (req, res) => {
     db.all('SELECT * FROM attendance ORDER BY time DESC', [], (err, rows) => {
         if (err) {
@@ -327,9 +281,6 @@ app.get('/api/attendance', (req, res) => {
     });
 });
 
-// =====================================
-// 9. Статус (з автоматичним часом)
-// =====================================
 app.get('/api/status', (req, res) => {
     db.get('SELECT COUNT(*) as count FROM tokens', [], (err, tokenRow) => {
         db.get('SELECT COUNT(*) as count FROM attendance', [], (err, attRow) => {
@@ -343,9 +294,6 @@ app.get('/api/status', (req, res) => {
     });
 });
 
-// =====================================
-// 10. Очистити всі токени
-// =====================================
 app.get('/api/clear', (req, res) => {
     activeTokens.clear();
     db.run('DELETE FROM tokens', [], (err) => {
@@ -353,9 +301,6 @@ app.get('/api/clear', (req, res) => {
     });
 });
 
-// =====================================
-// 11. Видалити тестові токени
-// =====================================
 app.get('/api/reset', (req, res) => {
     activeTokens.clear();
     db.run('DELETE FROM tokens', [], (err) => {
@@ -364,9 +309,6 @@ app.get('/api/reset', (req, res) => {
     });
 });
 
-// =====================================
-// 12. Тестовий ендпоінт
-// =====================================
 app.get('/api/test/:token', (req, res) => {
     const testToken = req.params.token;
     
@@ -386,9 +328,6 @@ app.get('/api/test/:token', (req, res) => {
     });
 });
 
-// =====================================
-// 13. Експорт в Excel
-// =====================================
 app.get('/api/export-excel', (req, res) => {
     console.log('📥 Запит на експорт Excel');
     
@@ -402,7 +341,6 @@ app.get('/api/export-excel', (req, res) => {
             return res.status(404).json({ error: 'Немає даних для експорту' });
         }
         
-        // Конвертуємо в формат для Excel
         const dataForExcel = rows.map(row => {
             return {
                 'ID': row.id,
@@ -412,15 +350,12 @@ app.get('/api/export-excel', (req, res) => {
             };
         });
         
-        // Створюємо Excel файл
         const wb = XLSX.utils.book_new();
         const ws = XLSX.utils.json_to_sheet(dataForExcel);
         XLSX.utils.book_append_sheet(wb, ws, 'Відмітки');
         
-        // Генеруємо файл
         const excelBuffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
         
-        // Відправляємо файл
         res.setHeader('Content-Disposition', 'attachment; filename=vidmitky.xlsx');
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
         res.send(excelBuffer);
@@ -429,9 +364,6 @@ app.get('/api/export-excel', (req, res) => {
     });
 });
 
-// =====================================
-// 14. Головна сторінка
-// =====================================
 app.get('/', (req, res) => {
     res.send(`
         <!DOCTYPE html>
@@ -475,10 +407,6 @@ app.get('/', (req, res) => {
         </html>
     `);
 });
-
-// =====================================
-// 15. Запуск сервера
-// =====================================
 app.listen(PORT, () => {
     console.log(`\n🚀 Сервер запущено на порту ${PORT}`);
     console.log(`🌍 https://work-ibj8.onrender.com`);
@@ -489,3 +417,4 @@ app.listen(PORT, () => {
     console.log(`📥 Excel: https://work-ibj8.onrender.com/api/export-excel`);
     console.log(`📍 Геолокація: УВІМКНЕНО (50 м від офісу)\n`);
 });
+
