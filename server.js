@@ -6,6 +6,7 @@ const fs = require('fs');
 const dayjs = require('dayjs');
 const utc = require('dayjs/plugin/utc');
 const timezone = require('dayjs/plugin/timezone');
+const XLSX = require('xlsx');
 
 // Налаштовуємо dayjs
 dayjs.extend(utc);
@@ -342,7 +343,50 @@ app.get('/api/test/:token', (req, res) => {
 });
 
 // =====================================
-// 13. Головна сторінка
+// 13. Експорт в Excel
+// =====================================
+app.get('/api/export-excel', (req, res) => {
+    console.log('📥 Запит на експорт Excel');
+    
+    db.all('SELECT * FROM attendance ORDER BY time DESC', [], (err, rows) => {
+        if (err) {
+            console.error('❌ Помилка отримання даних:', err);
+            return res.status(500).json({ error: err.message });
+        }
+        
+        if (!rows || rows.length === 0) {
+            return res.status(404).json({ error: 'Немає даних для експорту' });
+        }
+        
+        // Конвертуємо в формат для Excel
+        const dataForExcel = rows.map(row => {
+            return {
+                'ID': row.id,
+                'Працівник': row.employee,
+                'Токен': row.token,
+                'Дата та час': dayjs(row.time).format('DD.MM.YYYY HH:mm:ss')
+            };
+        });
+        
+        // Створюємо Excel файл
+        const wb = XLSX.utils.book_new();
+        const ws = XLSX.utils.json_to_sheet(dataForExcel);
+        XLSX.utils.book_append_sheet(wb, ws, 'Відмітки');
+        
+        // Генеруємо файл
+        const excelBuffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+        
+        // Відправляємо файл
+        res.setHeader('Content-Disposition', 'attachment; filename=vidmitky.xlsx');
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.send(excelBuffer);
+        
+        console.log(`✅ Excel файл створено, записів: ${rows.length}`);
+    });
+});
+
+// =====================================
+// 14. Головна сторінка
 // =====================================
 app.get('/', (req, res) => {
     res.send(`
@@ -379,6 +423,7 @@ app.get('/', (req, res) => {
                     <li><a href="/api/attendance">📊 Всі відмітки (київський час)</a></li>
                     <li><a href="/api/status">📈 Статус системи</a></li>
                     <li><a href="/api/reset">🧹 Очистити всі токени</a></li>
+                    <li><a href="/api/export-excel">📥 Завантажити Excel</a></li>
                 </ul>
             </div>
         </body>
@@ -387,7 +432,7 @@ app.get('/', (req, res) => {
 });
 
 // =====================================
-// 14. Запуск сервера
+// 15. Запуск сервера
 // =====================================
 app.listen(PORT, () => {
     console.log(`\n🚀 Сервер запущено на порту ${PORT}`);
@@ -395,5 +440,6 @@ app.listen(PORT, () => {
     console.log(`📱 QR сторінка: https://work-ibj8.onrender.com/qr.html`);
     console.log(`🔑 Токени: https://work-ibj8.onrender.com/api/tokens`);
     console.log(`📊 Відмітки: https://work-ibj8.onrender.com/api/attendance`);
-    console.log(`🧪 Тест: https://work-ibj8.onrender.com/api/test/test123\n`);
+    console.log(`🧪 Тест: https://work-ibj8.onrender.com/api/test/test123`);
+    console.log(`📥 Excel: https://work-ibj8.onrender.com/api/export-excel\n`);
 });
