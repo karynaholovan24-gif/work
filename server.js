@@ -1,168 +1,5 @@
-const express = require('express');
-const sqlite3 = require('sqlite3').verbose();
-const cors = require('cors');
-const path = require('path');
-const fs = require('fs');
-const dayjs = require('dayjs');
-const utc = require('dayjs/plugin/utc');
-const timezone = require('dayjs/plugin/timezone');
-const XLSX = require('xlsx');
-
-// Налаштовуємо dayjs
-dayjs.extend(utc);
-dayjs.extend(timezone);
-
-const app = express();
-
 // =====================================
-// Налаштування українського часу
-// =====================================
-process.env.TZ = 'Europe/Kiev';
-console.log('🕐 Часовий пояс:', process.env.TZ);
-console.log('🕐 Поточний час:', dayjs().tz('Europe/Kiev').format('DD.MM.YYYY HH:mm:ss'));
-
-const PORT = process.env.PORT || 3000;
-
-// =====================================
-// Тимчасове сховище токенів
-// =====================================
-const activeTokens = new Set();
-
-// =====================================
-// 1. Middleware
-// =====================================
-app.use(cors());
-app.use(express.json());
-app.use(express.static(__dirname));
-app.use(express.static(path.join(__dirname, '..')));
-
-// =====================================
-// 2. Підключення до SQLite
-// =====================================
-console.log('🔄 Створюємо базу даних SQLite...');
-console.log('📁 Поточна папка:', __dirname);
-
-// Перевіряємо права на запис
-try {
-    fs.accessSync(__dirname, fs.constants.W_OK);
-    console.log('✅ Права на запис є');
-} catch (err) {
-    console.error('❌ Немає прав на запис:', err);
-}
-
-const db = new sqlite3.Database('./database.sqlite', (err) => {
-    if (err) {
-        console.error('❌ Помилка відкриття БД:', err);
-    } else {
-        console.log('✅ База даних SQLite відкрита/створена');
-    }
-});
-
-// =====================================
-// 3. Створюємо таблиці
-// =====================================
-db.serialize(() => {
-    // Видаляємо старі таблиці
-    db.run(`DROP TABLE IF EXISTS tokens`);
-    db.run(`DROP TABLE IF EXISTS attendance`);
-
-    // Створюємо таблицю tokens
-    db.run(`CREATE TABLE tokens (
-        token TEXT PRIMARY KEY,
-        created_at TEXT
-    )`, function(err) {
-        if (err) {
-            console.error('❌ Помилка створення tokens:', err);
-        } else {
-            console.log('✅ Таблиця tokens створена');
-        }
-    });
-
-    // Створюємо таблицю attendance
-    db.run(`CREATE TABLE attendance (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        employee TEXT,
-        token TEXT,
-        time TEXT
-    )`, function(err) {
-        if (err) {
-            console.error('❌ Помилка створення attendance:', err);
-        } else {
-            console.log('✅ Таблиця attendance створена');
-        }
-    });
-});
-
-// =====================================
-// 4. Додаємо тестові токени при запуску
-// =====================================
-setTimeout(() => {
-    db.serialize(() => {
-        // Перевіряємо чи є токени
-        db.get('SELECT COUNT(*) as count FROM tokens', [], (err, row) => {
-            if (err) {
-                console.error('❌ Помилка перевірки токенів:', err);
-                return;
-            }
-            
-            console.log('📊 Поточна кількість токенів в БД:', row.count);
-            
-            if (row.count === 0) {
-                console.log('🔄 Додаю тестові токени...');
-                const testTokens = ['test123', 'demo456', 'admin789', 'qr2024', 'work001'];
-                
-                testTokens.forEach(token => {
-                    const kyivTime = dayjs().tz('Europe/Kiev').format('YYYY-MM-DD HH:mm:ss');
-                    db.run('INSERT INTO tokens (token, created_at) VALUES (?, ?)', [token, kyivTime], (err) => {
-                        if (!err) {
-                            console.log('✅ Додано тестовий токен:', token);
-                            activeTokens.add(token);
-                        }
-                    });
-                });
-                
-                console.log('✅ Тестові токени додано в БД та пам\'ять');
-            }
-            
-            // Показуємо всі токени
-            db.all('SELECT token FROM tokens', [], (err, rows) => {
-                if (!err && rows.length > 0) {
-                    console.log('📋 Токени в БД:', rows.map(r => r.token));
-                    rows.forEach(r => activeTokens.add(r.token));
-                    console.log('💾 Токени в пам\'яті:', Array.from(activeTokens));
-                }
-            });
-        });
-    });
-}, 1000);
-
-// =====================================
-// 5. Генерація токена
-// =====================================
-app.get('/api/generate-token', (req, res) => {
-    const token = Math.random().toString(36).substring(2, 10);
-    const kyivTime = dayjs().tz('Europe/Kiev').format('YYYY-MM-DD HH:mm:ss');
-    
-    console.log('✅ Створено токен:', token);
-    console.log('🕐 Час створення (київський):', dayjs().tz('Europe/Kiev').format('DD.MM.YYYY HH:mm:ss'));
-    
-    activeTokens.add(token);
-    
-    db.run('INSERT INTO tokens (token, created_at) VALUES (?, ?)', [token, kyivTime], (err) => {
-        if (err) {
-            console.error('❌ Помилка збереження токена:', err);
-        } else {
-            console.log('✅ Токен збережено в БД:', token);
-        }
-    });
-    
-    console.log('💾 Токени в пам\'яті:', Array.from(activeTokens));
-    
-    res.json({ token });
-});
-
-// =====================================
-// 6. Відмітка приходу
+// 6. Відмітка приходу (з геолокацією)
 // =====================================
 app.post('/api/check-in', (req, res) => {
     const { token, employee, latitude, longitude } = req.body;
@@ -179,6 +16,50 @@ app.post('/api/check-in', (req, res) => {
         return res.json({ success: false, message: '❌ Немає даних' });
     }
     
+    // ========== ПЕРЕВІРКА ГЕОЛОКАЦІЇ ==========
+    // Координати офісу (встав свої!)
+    const OFFICE_LAT = 48.92968597521573;  // Широта
+    const OFFICE_LON = 24.707211205709715; // Довгота
+    const MAX_DISTANCE = 0.05; // 50 метрів (0.05 км)
+    
+    // Функція розрахунку відстані між двома точками
+    function getDistanceFromOffice(lat, lon) {
+        const R = 6371; // Радіус Землі в кілометрах
+        const dLat = (lat - OFFICE_LAT) * Math.PI / 180;
+        const dLon = (lon - OFFICE_LON) * Math.PI / 180;
+        const a = 
+            Math.sin(dLat/2) * Math.sin(dLat/2) +
+            Math.cos(OFFICE_LAT * Math.PI / 180) * Math.cos(lat * Math.PI / 180) * 
+            Math.sin(dLon/2) * Math.sin(dLon/2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+        return R * c; // відстань в кілометрах
+    }
+    
+    // Перевіряємо, чи передані координати
+    if (!latitude || !longitude) {
+        console.log('❌ Немає координат');
+        return res.json({ 
+            success: false, 
+            message: '❌ Не вдалося отримати геолокацію. Дозвольте доступ до місця розташування' 
+        });
+    }
+    
+    // Розраховуємо відстань
+    const distance = getDistanceFromOffice(parseFloat(latitude), parseFloat(longitude));
+    console.log('📏 Відстань до офісу:', (distance * 1000).toFixed(0), 'метрів');
+    
+    // Перевіряємо, чи в межах дозволеної зони
+    if (distance > MAX_DISTANCE) {
+        console.log('❌ За межами офісу');
+        return res.json({ 
+            success: false, 
+            message: '❌ Ви за межами дозволеної зони. Відмітитись можна тільки в офісі' 
+        });
+    }
+    console.log('✅ Геолокація в межах офісу');
+    // ========== КІНЕЦЬ ПЕРЕВІРКИ ==========
+    
+    // Далі йде перевірка токена (як і було)
     if (activeTokens.has(token)) {
         console.log('✅ Токен ЗНАЙДЕНО в пам\'яті!');
         
@@ -236,210 +117,4 @@ app.post('/api/check-in', (req, res) => {
             );
         }
     });
-});
-
-// =====================================
-// 7. Перегляд всіх токенів
-// =====================================
-app.get('/api/tokens', (req, res) => {
-    db.all('SELECT * FROM tokens ORDER BY created_at DESC', [], (err, dbTokens) => {
-        // Конвертуємо час для відображення
-        if (dbTokens) {
-            dbTokens = dbTokens.map(token => {
-                return {
-                    token: token.token,
-                    created_at: dayjs(token.created_at).format('DD.MM.YYYY HH:mm:ss')
-                };
-            });
-        }
-        res.json({
-            memory_tokens: Array.from(activeTokens),
-            database_tokens: dbTokens || []
-        });
-    });
-});
-
-// =====================================
-// 8. Перегляд відміток
-// =====================================
-app.get('/api/attendance', (req, res) => {
-    db.all('SELECT * FROM attendance ORDER BY time DESC', [], (err, rows) => {
-        if (err) {
-            console.error('❌ Помилка отримання відміток:', err);
-            return res.json([]);
-        }
-        
-        if (rows) {
-            rows = rows.map(row => {
-                return {
-                    id: row.id,
-                    employee: row.employee,
-                    token: row.token,
-                    time: dayjs(row.time).format('DD.MM.YYYY HH:mm:ss')
-                };
-            });
-        }
-        res.json(rows || []);
-    });
-});
-
-// =====================================
-// 9. Статус (з автоматичним часом)
-// =====================================
-app.get('/api/status', (req, res) => {
-    db.get('SELECT COUNT(*) as count FROM tokens', [], (err, tokenRow) => {
-        db.get('SELECT COUNT(*) as count FROM attendance', [], (err, attRow) => {
-            res.json({ 
-                memory_tokens: activeTokens.size,
-                database_tokens: tokenRow?.count || 0,
-                attendance: attRow?.count || 0,
-                current_time: dayjs().tz('Europe/Kiev').format('DD.MM.YYYY HH:mm:ss')
-            });
-        });
-    });
-});
-
-// =====================================
-// 10. Очистити всі токени
-// =====================================
-app.get('/api/clear', (req, res) => {
-    activeTokens.clear();
-    db.run('DELETE FROM tokens', [], (err) => {
-        res.json({ success: true, message: '✅ Всі токени видалено' });
-    });
-});
-
-// =====================================
-// 11. Видалити тестові токени
-// =====================================
-app.get('/api/reset', (req, res) => {
-    activeTokens.clear();
-    db.run('DELETE FROM tokens', [], (err) => {
-        console.log('✅ Всі токени видалено');
-        res.json({ success: true, message: '✅ Базу очищено. Створіть новий токен!' });
-    });
-});
-
-// =====================================
-// 12. Тестовий ендпоінт
-// =====================================
-app.get('/api/test/:token', (req, res) => {
-    const testToken = req.params.token;
-    
-    console.log('🧪 Тестовий пошук токена:', testToken);
-    console.log('💾 Токени в пам\'яті:', Array.from(activeTokens));
-    
-    const found = activeTokens.has(testToken);
-    
-    db.get('SELECT token FROM tokens WHERE token = ?', [testToken], (err, row) => {
-        res.json({
-            token: testToken,
-            in_memory: found,
-            in_database: !!row,
-            memory_tokens: Array.from(activeTokens),
-            database_tokens: row ? [row.token] : []
-        });
-    });
-});
-
-// =====================================
-// 13. Експорт в Excel
-// =====================================
-app.get('/api/export-excel', (req, res) => {
-    console.log('📥 Запит на експорт Excel');
-    
-    db.all('SELECT * FROM attendance ORDER BY time DESC', [], (err, rows) => {
-        if (err) {
-            console.error('❌ Помилка отримання даних:', err);
-            return res.status(500).json({ error: err.message });
-        }
-        
-        if (!rows || rows.length === 0) {
-            return res.status(404).json({ error: 'Немає даних для експорту' });
-        }
-        
-        // Конвертуємо в формат для Excel
-        const dataForExcel = rows.map(row => {
-            return {
-                'ID': row.id,
-                'Працівник': row.employee,
-                'Токен': row.token,
-                'Дата та час': dayjs(row.time).format('DD.MM.YYYY HH:mm:ss')
-            };
-        });
-        
-        // Створюємо Excel файл
-        const wb = XLSX.utils.book_new();
-        const ws = XLSX.utils.json_to_sheet(dataForExcel);
-        XLSX.utils.book_append_sheet(wb, ws, 'Відмітки');
-        
-        // Генеруємо файл
-        const excelBuffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
-        
-        // Відправляємо файл
-        res.setHeader('Content-Disposition', 'attachment; filename=vidmitky.xlsx');
-        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-        res.send(excelBuffer);
-        
-        console.log(`✅ Excel файл створено, записів: ${rows.length}`);
-    });
-});
-
-// =====================================
-// 14. Головна сторінка
-// =====================================
-app.get('/', (req, res) => {
-    res.send(`
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Система обліку часу</title>
-            <style>
-                body { font-family: Arial; padding: 40px; background: linear-gradient(135deg, #667eea, #764ba2); color: white; }
-                .container { max-width: 800px; margin: 0 auto; background: rgba(255,255,255,0.1); padding: 30px; border-radius: 15px; }
-                h1 { margin-bottom: 20px; }
-                ul { list-style: none; padding: 0; }
-                li { margin: 15px 0; }
-                a { color: white; text-decoration: none; padding: 10px 20px; background: rgba(255,255,255,0.2); border-radius: 8px; display: inline-block; }
-                a:hover { background: rgba(255,255,255,0.3); }
-                .info { margin-top: 20px; padding: 15px; background: rgba(0,0,0,0.3); border-radius: 8px; }
-                .success { color: #aaffaa; }
-                .warning { color: #ffaa00; }
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <h1>✅ Система обліку часу</h1>
-                <p>Сервер працює з <span class="success">бібліотекою dayjs</span></p>
-                <div class="info">
-                    <p>🕐 Поточний час: ${dayjs().tz('Europe/Kiev').format('DD.MM.YYYY HH:mm:ss')}</p>
-                    <p>🔹 Час автоматично перемикається між літнім та зимовим</p>
-                    <p>🔹 Якщо токен не знайдено - він створюється автоматично</p>
-                    <p>🔹 Тестові токени: test123, demo456, admin789, qr2024, work001</p>
-                </div>
-                <ul>
-                    <li><a href="/qr.html">📱 QR код для сканування</a></li>
-                    <li><a href="/api/tokens">🔑 Перегляд всіх токенів</a></li>
-                    <li><a href="/api/attendance">📊 Всі відмітки (київський час)</a></li>
-                    <li><a href="/api/status">📈 Статус системи</a></li>
-                    <li><a href="/api/reset">🧹 Очистити всі токени</a></li>
-                    <li><a href="/api/export-excel">📥 Завантажити Excel</a></li>
-                </ul>
-            </div>
-        </body>
-        </html>
-    `);
-});
-
-// =====================================
-// 15. Запуск сервера
-// =====================================
-app.listen(PORT, () => {
-    console.log(`\n🚀 Сервер запущено на порту ${PORT}`);
-    console.log(`🌍 https://work-ibj8.onrender.com`);
-    console.log(`📱 QR сторінка: https://work-ibj8.onrender.com/qr.html`);
-    console.log(`🔑 Токени: https://work-ibj8.onrender.com/api/tokens`);
-    console.log(`📊 Відмітки: https://work-ibj8.onrender.com/api/attendance`);
-    console.log(`🧪 Тест: https://work-ibj8.onrender.com/api/test/test123`);
-    console.log(`📥 Excel: https://work-ibj8.onrender.com/api/export-excel\n`);
 });
