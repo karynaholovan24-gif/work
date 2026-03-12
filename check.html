@@ -37,13 +37,18 @@ margin-bottom:20px;
 color:#333;
 }
 
-select{
+input{
 width:100%;
 padding:12px;
 margin-bottom:20px;
 border-radius:8px;
 border:1px solid #ccc;
 font-size:16px;
+}
+
+input:focus{
+outline:none;
+border-color:#667eea;
 }
 
 button{
@@ -101,16 +106,9 @@ padding-top:10px;
 <div class="container">
 
 <h2>Відмітити прихід</h2>
-    
-<select id="employee">
-<option value="">Оберіть працівника</option>
-<option value="Іван">Іван</option>
-<option value="Марія">Марія</option>
-<option value="Олег">Олег</option>
-<option value="Анна">Анна</option>
-<option value="Петро">Петро</option>
-<option value="Олена">Олена</option>
-</select>
+
+<!-- Поле для введення імені -->
+<input type="text" id="employee" placeholder="Введіть ваше ім'я" autocomplete="off">
 
 <button onclick="markArrival()" id="checkBtn">
 Відмітити прихід
@@ -118,7 +116,7 @@ padding-top:10px;
 
 <div class="status" id="status"></div>
 
-<!-- Додамо приховану інформацію для дебагу -->
+<!-- Інформація для дебагу -->
 <div class="debug-info" id="debug"></div>
 
 </div>
@@ -130,6 +128,7 @@ const token = params.get("token");
 const statusDiv = document.getElementById("status");
 const debugDiv = document.getElementById("debug");
 const button = document.getElementById("checkBtn");
+const employeeInput = document.getElementById("employee");
 
 // Показуємо токен для перевірки
 debugDiv.innerHTML = `Токен: ${token ? token : 'відсутній'}`;
@@ -140,13 +139,19 @@ if (!token) {
     button.disabled = true;
 }
 
-function markArrival() {
-    const employeeSelect = document.getElementById("employee");
-    const employee = employeeSelect.value;
+// Дозволяємо відправку по Enter
+employeeInput.addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') {
+        markArrival();
+    }
+});
 
-    // Перевіряємо чи вибрано працівника
+function markArrival() {
+    const employee = employeeInput.value.trim();
+
+    // Перевіряємо чи введено ім'я
     if (!employee) {
-        statusDiv.innerHTML = "❌ Оберіть працівника зі списку";
+        statusDiv.innerHTML = "❌ Введіть ваше ім'я";
         statusDiv.className = "status error";
         return;
     }
@@ -193,6 +198,7 @@ function markArrival() {
                     statusDiv.innerHTML = "✅ " + response.message;
                     statusDiv.className = "status success";
                     button.disabled = true;
+                    employeeInput.disabled = true;
                 } else {
                     statusDiv.innerHTML = "❌ " + response.message;
                     statusDiv.className = "status error";
