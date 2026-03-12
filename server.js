@@ -10,7 +10,6 @@ const timezone = require('dayjs/plugin/timezone');
 // Налаштовуємо dayjs
 dayjs.extend(utc);
 dayjs.extend(timezone);
-dayjs.tz.setDefault('Europe/Kiev');
 
 const app = express();
 
@@ -69,7 +68,7 @@ db.serialize(() => {
     // Створюємо таблицю tokens
     db.run(`CREATE TABLE tokens (
         token TEXT PRIMARY KEY,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        created_at TEXT
     )`, function(err) {
         if (err) {
             console.error('❌ Помилка створення tokens:', err);
@@ -83,7 +82,7 @@ db.serialize(() => {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         employee TEXT,
         token TEXT,
-        time DATETIME DEFAULT CURRENT_TIMESTAMP
+        time TEXT
     )`, function(err) {
         if (err) {
             console.error('❌ Помилка створення attendance:', err);
@@ -112,7 +111,8 @@ setTimeout(() => {
                 const testTokens = ['test123', 'demo456', 'admin789', 'qr2024', 'work001'];
                 
                 testTokens.forEach(token => {
-                    db.run('INSERT INTO tokens (token) VALUES (?)', [token], (err) => {
+                    const kyivTime = dayjs().tz('Europe/Kiev').format('YYYY-MM-DD HH:mm:ss');
+                    db.run('INSERT INTO tokens (token, created_at) VALUES (?, ?)', [token, kyivTime], (err) => {
                         if (!err) {
                             console.log('✅ Додано тестовий токен:', token);
                             activeTokens.add(token);
@@ -140,13 +140,14 @@ setTimeout(() => {
 // =====================================
 app.get('/api/generate-token', (req, res) => {
     const token = Math.random().toString(36).substring(2, 10);
+    const kyivTime = dayjs().tz('Europe/Kiev').format('YYYY-MM-DD HH:mm:ss');
     
     console.log('✅ Створено токен:', token);
     console.log('🕐 Час створення (київський):', dayjs().tz('Europe/Kiev').format('DD.MM.YYYY HH:mm:ss'));
     
     activeTokens.add(token);
     
-    db.run('INSERT INTO tokens (token) VALUES (?)', [token], (err) => {
+    db.run('INSERT INTO tokens (token, created_at) VALUES (?, ?)', [token, kyivTime], (err) => {
         if (err) {
             console.error('❌ Помилка збереження токена:', err);
         } else {
@@ -164,6 +165,7 @@ app.get('/api/generate-token', (req, res) => {
 // =====================================
 app.post('/api/check-in', (req, res) => {
     const { token, employee, latitude, longitude } = req.body;
+    const kyivTime = dayjs().tz('Europe/Kiev').format('YYYY-MM-DD HH:mm:ss');
     
     console.log('\n📝 ===== НОВА ВІДМІТКА =====');
     console.log('🔍 Отриманий token з QR:', token);
@@ -182,8 +184,8 @@ app.post('/api/check-in', (req, res) => {
         activeTokens.delete(token);
         db.run('DELETE FROM tokens WHERE token = ?', [token]);
         
-        db.run('INSERT INTO attendance (employee, token) VALUES (?, ?)', 
-            [employee, token], 
+        db.run('INSERT INTO attendance (employee, token, time) VALUES (?, ?, ?)', 
+            [employee, token, kyivTime], 
             function(err) {
                 if (err) {
                     console.error('❌ Помилка запису:', err);
@@ -203,8 +205,8 @@ app.post('/api/check-in', (req, res) => {
             
             db.run('DELETE FROM tokens WHERE token = ?', [token]);
             
-            db.run('INSERT INTO attendance (employee, token) VALUES (?, ?)', 
-                [employee, token], 
+            db.run('INSERT INTO attendance (employee, token, time) VALUES (?, ?, ?)', 
+                [employee, token, kyivTime], 
                 function(err) {
                     if (err) {
                         res.json({ success: false, message: '❌ Помилка запису' });
@@ -217,10 +219,10 @@ app.post('/api/check-in', (req, res) => {
             console.log('⚠️ Токен не знайдено, створюю автоматично...');
             
             activeTokens.add(token);
-            db.run('INSERT INTO tokens (token) VALUES (?)', [token]);
+            db.run('INSERT INTO tokens (token, created_at) VALUES (?, ?)', [token, kyivTime]);
             
-            db.run('INSERT INTO attendance (employee, token) VALUES (?, ?)', 
-                [employee, token], 
+            db.run('INSERT INTO attendance (employee, token, time) VALUES (?, ?, ?)', 
+                [employee, token, kyivTime], 
                 function(err) {
                     if (err) {
                         console.error('❌ Помилка запису:', err);
@@ -240,6 +242,15 @@ app.post('/api/check-in', (req, res) => {
 // =====================================
 app.get('/api/tokens', (req, res) => {
     db.all('SELECT * FROM tokens ORDER BY created_at DESC', [], (err, dbTokens) => {
+        // Конвертуємо час для відображення
+        if (dbTokens) {
+            dbTokens = dbTokens.map(token => {
+                return {
+                    token: token.token,
+                    created_at: dayjs(token.created_at).format('DD.MM.YYYY HH:mm:ss')
+                };
+            });
+        }
         res.json({
             memory_tokens: Array.from(activeTokens),
             database_tokens: dbTokens || []
@@ -248,7 +259,7 @@ app.get('/api/tokens', (req, res) => {
 });
 
 // =====================================
-// 8. Перегляд відміток (просто і надійно з dayjs)
+// 8. Перегляд відміток
 // =====================================
 app.get('/api/attendance', (req, res) => {
     db.all('SELECT * FROM attendance ORDER BY time DESC', [], (err, rows) => {
@@ -259,25 +270,12 @@ app.get('/api/attendance', (req, res) => {
         
         if (rows) {
             rows = rows.map(row => {
-                try {
-                    // Конвертуємо UTC в київський час
-                    const kyivTime = dayjs.utc(row.time).tz('Europe/Kiev').format('DD.MM.YYYY HH:mm:ss');
-                    
-                    return {
-                        id: row.id,
-                        employee: row.employee,
-                        token: row.token,
-                        time: kyivTime
-                    };
-                } catch (e) {
-                    console.error('❌ Помилка конвертації часу:', e);
-                    return {
-                        id: row.id,
-                        employee: row.employee,
-                        token: row.token,
-                        time: row.time
-                    };
-                }
+                return {
+                    id: row.id,
+                    employee: row.employee,
+                    token: row.token,
+                    time: dayjs(row.time).format('DD.MM.YYYY HH:mm:ss')
+                };
             });
         }
         res.json(rows || []);
